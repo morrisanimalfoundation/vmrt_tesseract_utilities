@@ -73,7 +73,7 @@ def run_tesseract(args: argparse.Namespace) -> None:
         print(f'Item {item["filepath"]} had an average confidence score of {item["confidence"]}.')
         output.append(item)
     with open(f'{args.output_to}/filemap_confidence-{args.offset}-{(args.offset + args.chunk_size)}.json', 'w') as f:
-        json.dump(json_map, f)
+        json.dump(output, f)
 
 
 def parse_args() -> argparse.Namespace:
