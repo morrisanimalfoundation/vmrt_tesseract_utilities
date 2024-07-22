@@ -49,7 +49,7 @@ def run_tesseract(args: argparse.Namespace) -> None:
             continue
         confidence_scores = []
         try:
-            print(f'Processing item {ikey + args.offset}/{args.offset + args.chunk_size} ({total_items})...')
+            print(f'Processing item {ikey}/{args.offset + args.chunk_size} ({total_items})...')
             images = pdf2image.convert_from_path(item['filepath'])
             for pg, image in enumerate(images):
                 with tesserocr.PyTessBaseAPI('/usr/share/tessdata') as api:
