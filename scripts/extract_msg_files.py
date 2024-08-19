@@ -1,19 +1,16 @@
+import extract_msg
+
 import argparse
 import json
 import re
 import os
 
-from vmrt_tesseract_utilities.report_data import ReportData
-
 """
 Creates a file list for a given directory and sub directories, extracting GRLS data from the path.
 """
 
-# Pattern to match and extract the dog id.
-dog_id_re = r"(094-[0-9]{6})"
 
-
-def create_file_list(path: str) -> list:
+def extract_msg_files(path: str) -> list:
     """
     Creates a file list of json objects describing files for a given directory.
 
@@ -29,17 +26,17 @@ def create_file_list(path: str) -> list:
     """
     output = []
     for subdir, dirs, files in os.walk(path):
-        dog_match = re.search(dog_id_re, subdir)
-        if dog_match:
-            dog_id = dog_match.group(0)
-        else:
-            continue
         for file in files:
             filepath = subdir + os.sep + file
-            row = ReportData()\
-                .set('subject_id', dog_id)\
-                .set_origin_file(filepath)
-            output.append(row)
+            bits = os.path.splitext(file)
+            ext = bits[1]
+            if ext == '.msg':
+                try:
+                    msg = extract_msg.openMsg(filepath)
+                    msg.save(customPath=f'{subdir}/{bits[0]}_extracted')
+                    print(f'Extracted msg to {subdir}/{bits[0]}_extracted')
+                except Exception as e:
+                    print(e)
     return output
 
 
@@ -72,5 +69,6 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == '__main__':
     provided_args = parse_args()
-    file_list = create_file_list(provided_args.path_to_describe)
+    file_list = extract_msg_files(provided_args.path_to_describe)
     output_list(file_list)
+
