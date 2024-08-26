@@ -1,14 +1,20 @@
 from abc import ABC, abstractmethod
 from copy import deepcopy
-import os
 
 import pdf2image
 import tesserocr
 
 from vmrt_tesseract_utilities.report_data import ReportData
 
+"""
+Provides Tesseract processing with different output scales (document, page, block).
+"""
+
 
 class TesseractOperationBase(ABC):
+    """
+    A base operation class for further use.
+    """
 
     def __init__(self, output_strategy=None):
         if output_strategy is not None and not callable(output_strategy):
@@ -17,6 +23,7 @@ class TesseractOperationBase(ABC):
 
     def __output_ocr_data__(self, strategy_type: str, row: ReportData, ocr_output: str):
         if self.output_strategy is not None:
+            # If we have an output strategy, call it.
             self.output_strategy(strategy_type, row, ocr_output)
 
     @abstractmethod
@@ -25,6 +32,9 @@ class TesseractOperationBase(ABC):
 
 
 class TesseractOperationDoc(TesseractOperationBase):
+    """
+    Returns Tesseract results for entire documents.
+    """
     def process_row(self, row: ReportData) -> list:
         doc_row = deepcopy(row)
         page_content = ''
@@ -54,7 +64,9 @@ class TesseractOperationDoc(TesseractOperationBase):
 
 
 class TesseractOperationPage(TesseractOperationBase):
-
+    """
+    Returns Tesseract results for entire pages.
+    """
     def process_row(self, row: ReportData) -> list:
         output = []
         page_row = None
@@ -83,6 +95,9 @@ class TesseractOperationPage(TesseractOperationBase):
 
 
 class TesseractOperationBlock(TesseractOperationBase):
+    """
+    Returns Tesseract results for individual blocks of text.
+    """
     def process_row(self, row: ReportData) -> list:
         output = []
         block_row = None

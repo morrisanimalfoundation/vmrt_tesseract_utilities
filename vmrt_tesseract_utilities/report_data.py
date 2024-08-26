@@ -1,9 +1,15 @@
 import os
 from typing import Self
 
+# Required for object serialization.
 import json_fix
 
 
+"""
+Provides a serializable, validated ReportData object.
+"""
+
+# Keys our report row may contain.
 item_keys = [
     'subject_id',
     'origin_filepath',
@@ -17,9 +23,16 @@ item_keys = [
     'output_ext',
 ]
 
+
 class ReportData:
+    """
+    A serializable, key validated representation of report data.
+    """
     def __init__(self, **kwargs):
-        self.set_data(kwargs.get('data', {}))
+        data = kwargs.get('data', {})
+        self.data = {}
+        if len(data.keys()) > 0:
+            self.set_data(data)
 
     def __json__(self):
         return self.data
@@ -28,12 +41,9 @@ class ReportData:
         if len(data.keys()) > 0 and not all(k in item_keys for k in data.keys()):
             invalid_keys = ','.join(list(set(data.keys()) - set(item_keys)))
             raise RuntimeError(f'Invalid data keys: {invalid_keys}')
-        if not hasattr(self, 'data'):
-            self.data = {}
         for key, value in data.items():
             self.data[key] = value
         return self
-
 
     def set(self, key, value):
         if not key in item_keys:
@@ -41,20 +51,16 @@ class ReportData:
         self.data[key] = value
         return self
 
-
-
     def set_origin_file(self, path) -> Self:
-        self.__set_file('origin', path)
+        self.__set_file__('origin', path)
         return self
-
 
     def set_output_file(self, path) -> Self:
-        self.__set_file('output', path)
+        self.__set_file__('output', path)
         return self
 
-    def __set_file(self, seed, path):
+    def __set_file__(self, seed, path):
         bits = os.path.splitext(path)
-        print(bits)
         values = {
             f'{seed}_filepath': path,
             f'{seed}_filename': os.path.basename(path),
