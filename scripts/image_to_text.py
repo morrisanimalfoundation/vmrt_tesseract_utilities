@@ -10,8 +10,21 @@ Runs Tesseract on items in a file map to extract text and calculate confidence s
 """
 
 
-def get_output_strategy(output_directory) -> callable:
-    def output_strategy(strategy_type, row: ReportData, ocr_result: str) -> None:
+def get_output_strategy(output_directory: str) -> callable:
+    """
+    Returns an output strategy for use in our Tesseract operations.
+
+    Parameters
+    ----------
+    output_directory: str
+      The directory where we want our output.
+
+    Returns
+    -------
+    output_strategy: callable
+      The strategy callable.
+    """
+    def output_strategy(strategy_type: str, row: ReportData, ocr_result: str) -> None:
         if len(ocr_result) > 0:
             base_path = f'{output_directory}/unstructured_text/{strategy_type}'
             if not os.path.exists(base_path):
