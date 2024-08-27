@@ -2,12 +2,40 @@ import argparse
 import json
 import os
 
-import pdf2image
-import tesserocr
+from vmrt_tesseract_utilities.report_data import ReportData
+from vmrt_tesseract_utilities.tesseract_operations import TesseractOperationDoc, TesseractOperationPage, TesseractOperationBlock
 
 """
 Runs Tesseract on items in a file map to extract text and calculate confidence scores.
 """
+
+
+def get_output_strategy(output_directory: str) -> callable:
+    """
+    Returns an output strategy for use in our Tesseract operations.
+
+    Parameters
+    ----------
+    output_directory: str
+      The directory where we want our output.
+
+    Returns
+    -------
+    output_strategy: callable
+      The strategy callable.
+    """
+    def output_strategy(strategy_type: str, row: ReportData, ocr_result: str) -> None:
+        if len(ocr_result) > 0:
+            base_path = f'{output_directory}/unstructured_text/{strategy_type}'
+            if not os.path.exists(base_path):
+                os.makedirs(base_path)
+            file_name = row.get('origin_filename')
+            bits = os.path.splitext(os.path.basename(file_name))
+            output_path = f'{base_path}/{bits[0]}.txt'
+            row.set_output_file(output_path)
+            with open(output_path, 'w') as f:
+                f.write(ocr_result)
+    return output_strategy
 
 
 def run_tesseract(args: argparse.Namespace) -> None:
@@ -23,55 +51,37 @@ def run_tesseract(args: argparse.Namespace) -> None:
     args: argparse.Namespace
       The args from the CLI.
     """
+    if args.strategy not in ('doc', 'page', 'block',):
+        raise ValueError("'--strategy' must be either 'doc', 'page' or 'block'")
+    print(f'Here we go with strategy: {args.strategy}')
+    output_strategy = get_output_strategy(args.output_to)
+    if args.strategy == 'doc':
+        op = TesseractOperationDoc(output_strategy)
+    if args.strategy == 'page':
+        op = TesseractOperationPage(output_strategy)
+    if args.strategy == 'block':
+        op = TesseractOperationBlock(output_strategy)
     with open(args.input_file) as f:
         json_map = json.load(f)
     total_items = len(json_map)
     output = []
     for ikey, item in enumerate(json_map):
+        item_object = ReportData(data=item)
         if ikey < args.offset:
             continue
         if ikey >= args.offset + args.chunk_size:
             break
-        if item['ext'] != '.pdf':
+        if item_object.get('origin_ext') != 'pdf':
             print(f'Skipping item {ikey} not a pdf file')
-            item['status'] = 'skipped'
-            output.append(item)
             continue
-        if not os.path.isfile(item['filepath']):
+        if not os.path.isfile(item_object.get('origin_filepath')):
             print(f'Skipping item {ikey} file not found')
-            item['status'] = 'file-not-found'
-            output.append(item)
             continue
-        if os.path.getsize(item['filepath']) == 0:
+        if os.path.getsize(item_object.get('origin_filepath')) == 0:
             print(f'Skipping item {ikey} file is empty')
-            item['status'] = 'file-empty'
-            output.append(item)
             continue
-        confidence_scores = []
-        try:
-            print(f'Processing item {ikey}/{args.offset + args.chunk_size} ({total_items})...')
-            images = pdf2image.convert_from_path(item['filepath'])
-            for pg, image in enumerate(images):
-                with tesserocr.PyTessBaseAPI('/usr/share/tessdata') as api:
-                    api.SetVariable('debug_file', '/dev/null')
-                    api.SetImage(image)
-                    ocr_result = api.GetUTF8Text()
-                    page_confidence = api.MeanTextConf()
-                    confidence_scores.append(page_confidence)
-                    if len(ocr_result) > 0:
-                        with open(f'{args.output_to}/unstructured_text/{os.path.basename(item["filepath"])}-{pg}.txt','w') as f:
-                            f.write(ocr_result)
-                print(f'Item {item["filepath"]}:{pg} had a confidence score of {page_confidence}.')
-                item['status'] = 'processed'
-        except Exception as e:
-            item['status'] = 'error'
-            print(str(e))
-        if len(confidence_scores) > 0:
-            item['confidence'] = sum(confidence_scores) / len(confidence_scores)
-        else:
-            item['confidence'] = 0
-        print(f'Item {item["filepath"]} had an average confidence score of {item["confidence"]}.')
-        output.append(item)
+        print(f'Processing item {ikey}/{args.offset + args.chunk_size} ({total_items})...')
+        output += op.process_row(item_object)
     with open(f'{args.output_to}/filemap_confidence-{args.offset}-{(args.offset + args.chunk_size)}.json', 'w') as f:
         json.dump(output, f)
 
@@ -91,6 +101,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('output_to')
     parser.add_argument('--chunk_size', type=int, default=1000)
     parser.add_argument('--offset', type=int, default=0)
+    parser.add_argument('--strategy', type=str, default='page')
     return parser.parse_args()
 
 

@@ -3,15 +3,14 @@ import json
 import re
 import os
 
+from vmrt_tesseract_utilities.report_data import ReportData
+
 """
 Creates a file list for a given directory and sub directories, extracting GRLS data from the path.
 """
 
 # Pattern to match and extract the dog id.
 dog_id_re = r"(094-[0-9]{6})"
-
-# Various enrollment statuses expressed in the folder names.
-enrollment_statuses = ('enrolled deceased', 'withdrawn', 'enactive')
 
 
 def create_file_list(path: str) -> list:
@@ -35,21 +34,12 @@ def create_file_list(path: str) -> list:
             dog_id = dog_match.group(0)
         else:
             continue
-        status = 'unknown'
-        for possible_status in enrollment_statuses:
-            if subdir.lower().find(possible_status) > -1:
-                status = possible_status
-                break
         for file in files:
             filepath = subdir + os.sep + file
-            ext = os.path.splitext(file)[1]
-            output_item = {
-                'dog_id': dog_id,
-                'enrollment_status': status,
-                'filepath': filepath,
-                'ext': ext,
-            }
-            output.append(output_item)
+            row = ReportData()\
+                .set('subject_id', dog_id)\
+                .set_origin_file(filepath)
+            output.append(row)
     return output
 
 
