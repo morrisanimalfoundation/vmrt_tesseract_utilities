@@ -9,4 +9,4 @@ RUN apt-get update -y &&\
     useradd -l -u ${USER_ID} -g sudo jenkins && \
     mkdir -m 0755 /home/jenkins && chown jenkins /home/jenkins
 USER jenkins
-WORKDIR /workdir
+WORKDIR /workspace
