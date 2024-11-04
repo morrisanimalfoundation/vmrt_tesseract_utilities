@@ -21,6 +21,9 @@ pandas==2.2.2
 pcodedmp==1.2.6
 pdf2image==1.17.0
 pillow==10.3.0
+presidio_analyzer==2.2.355
+presidio_analyzer[transformers]==2.2.355
+presidio_anonymizer==2.2.355
 pycparser==2.22
 pydantic==2.7.1
 pydantic_core==2.18.2
@@ -30,6 +33,7 @@ python-dateutil==2.9.0.post0
 pytz==2024.1
 red-black-tree-mod==1.20
 RTFDE==0.1.2
+setuptools==68.2.0
 six==1.16.0
 soupsieve==2.5
 tesseract==0.1.3
