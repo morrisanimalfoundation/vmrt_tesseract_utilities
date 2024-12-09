@@ -19,14 +19,10 @@ fi
 chmod +x "${SCRIPT_DIR}/install_spacy_models.sh"
 /bin/bash "${SCRIPT_DIR}/install_spacy_models.sh"
 
-# Ensure our output directories are there.
-mkdir -p "${OUTPUT_DIR}/scrubbed_text"
-mkdir -p "${OUTPUT_DIR}/scrubbed_confidence"
-
-python "${SCRIPT_DIR}/pii-scrubber.py" \
+python "${SCRIPT_DIR}/pii_scrubber.py" \
       /workspace/output/filemap*.json \
       "$OUTPUT_DIR" \
       --config="${SCRIPT_DIR}/config/stanford-deidentifier-base_nlp.yaml" \
-      --threshold=0
+      --threshold=0.45
 
 echo "All files processed."

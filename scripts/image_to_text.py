@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 
+from scripts.scrubbers import pii_scrubber
 from vmrt_tesseract_utilities.report_data import ReportData
 from vmrt_tesseract_utilities.tesseract_operations import TesseractOperationDoc, TesseractOperationPage, TesseractOperationBlock
 
@@ -43,6 +44,49 @@ def get_output_strategy(output_directory: str) -> callable:
     return output_strategy
 
 
+def get_scrubber_method(output_directory):
+    """
+    Returns a scrubber strategy for use in our Tesseract operations.
+
+    Parameters
+    ----------
+    output_directory: str
+      The directory where we want our output.
+
+    Returns
+    -------
+    scrubber_method: callable
+      The callable strategy function.
+    """
+    def scrubber_method(strategy_type: str, row: ReportData, ocr_result: str) -> None:
+        if len(ocr_result) > 0:
+            nlp_engine = pii_scrubber.create_nlp_engine('stanford-deidentifier-base_nlp.yaml')
+            scrubbed_text, result_output = pii_scrubber.scrub_pii(ocr_result, nlp_engine, 0.4)
+            base_path = f'{output_directory}/scrubbed_text/{strategy_type}'
+            file_name = row.get('origin_filename')
+            filename_without_extension = os.path.splitext(file_name)[0]
+            count = 1
+            if 'page' in row.data:
+                count = row.get('page')
+            if 'block' in row.data:
+                count = row.get('block')
+
+            # Write the scrubbed text to a file.
+            scrubbed_dir = f'{base_path}/scrubbed_{strategy_type}'
+            os.makedirs(scrubbed_dir, exist_ok=True)
+            output_file = f'{scrubbed_dir}/{filename_without_extension}-{count}.txt'
+            pii_scrubber.write_scrubbed_txt(output_file, scrubbed_text)
+            row.set('scrubbed_output_filepath', output_file)
+
+            # Write the scrubbed confidence values to a file.
+            confidence_dir = f'{base_path}/scrubbed_confidence'
+            os.makedirs(confidence_dir, exist_ok=True)
+            confidence_file = f'{confidence_dir}/confidence-{filename_without_extension}-{count}.json'
+            pii_scrubber.write_confidence_record(confidence_file, result_output, ocr_result)
+            row.set('scrubbed_confidence_filepath', confidence_file)
+    return scrubber_method
+
+
 def run_tesseract(args: argparse.Namespace) -> None:
     """
     Runs Tesseract on a list of JSON objects describing files.
@@ -60,12 +104,13 @@ def run_tesseract(args: argparse.Namespace) -> None:
         raise ValueError("'--strategy' must be either 'doc', 'page' or 'block'")
     print(f'Here we go with strategy: {args.strategy}')
     output_strategy = get_output_strategy(args.output_to)
+    scrubber_method = get_scrubber_method(args.output_to)
     if args.strategy == 'doc':
-        op = TesseractOperationDoc(output_strategy)
+        op = TesseractOperationDoc(output_strategy, scrubber_method)
     if args.strategy == 'page':
-        op = TesseractOperationPage(output_strategy)
+        op = TesseractOperationPage(output_strategy, scrubber_method)
     if args.strategy == 'block':
-        op = TesseractOperationBlock(output_strategy)
+        op = TesseractOperationBlock(output_strategy, scrubber_method)
     with open(args.input_file) as f:
         json_map = json.load(f)
     total_items = len(json_map)

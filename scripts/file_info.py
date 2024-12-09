@@ -52,7 +52,7 @@ def output_list(file_list: list) -> None:
     file_list: list
       A list of json objects.
     """
-    print(json.dumps(file_list))
+    print(json.dumps(file_list, indent=2))
 
 
 def parse_args() -> argparse.Namespace:

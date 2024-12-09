@@ -15,16 +15,17 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 EXCLUDE_TYPES = frozenset(['IN_PAN'])  # Use frozenset for efficient lookups
 
-def create_nlp_engine(nlp_config_file: str) -> AnalyzerEngine:
-    """Creates and configures a Presidio AnalyzerEngine.
+def create_nlp_engine(nlp_config_filename: str) -> AnalyzerEngine:
+    """
+    Creates and configures a Presidio AnalyzerEngine.
 
     Sets up a Presidio AnalyzerEngine using the provided
     configuration file, which specifies the NLP engine and other settings.
 
     Parameters
     ----------
-    nlp_config_file : str
-        Path to the YAML configuration file for the NLP engine.
+    nlp_config_filename : str
+        The filename of the YAML configuration file for the NLP engine.
 
     Returns
     -------
@@ -37,7 +38,9 @@ def create_nlp_engine(nlp_config_file: str) -> AnalyzerEngine:
         If any error occurs during the creation of the NLP engine.
     """
     try:
-        provider = NlpEngineProvider(conf_file=nlp_config_file)
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        nlp_config_filepath = f'{script_dir}/scrubbers/config/{nlp_config_filename}'
+        provider = NlpEngineProvider(conf_file=nlp_config_filepath)
         engine = provider.create_engine()
         return AnalyzerEngine(nlp_engine=engine, supported_languages=['en'])
 
@@ -47,7 +50,8 @@ def create_nlp_engine(nlp_config_file: str) -> AnalyzerEngine:
 
 
 def scrub_pii(text: str, analyzer: AnalyzerEngine, threshold: float) -> tuple[str | None, list[RecognizerResult]]:
-    """Scrubs PII from text using the Presidio library.
+    """
+    Scrubs PII from text using the Presidio library.
 
     Parameters
     ----------
@@ -79,7 +83,8 @@ def scrub_pii(text: str, analyzer: AnalyzerEngine, threshold: float) -> tuple[st
 
 
 def write_scrubbed_txt(output_filename: str, anonymized_text: str) -> None:
-    """Writes the anonymized text to an output file.
+    """
+    Writes the anonymized text to an output file.
 
     Parameters
     ----------
@@ -92,15 +97,14 @@ def write_scrubbed_txt(output_filename: str, anonymized_text: str) -> None:
         if anonymized_text:
             with open(output_filename, 'w') as f:
                 f.write(anonymized_text)
-        logging.info(f'PII scrubbed successfully. Output written to {output_filename}')
-
     except Exception as e:
         logging.error(f'Error writing scrubbed output: {e}')
         raise
 
 
 def write_confidence_record(filename: str, filtered_results: list, original_text: str) -> None:
-    """Writes the filtered results to a JSON file.
+    """
+    Writes the filtered results to a JSON file.
 
     Parameters
     ----------
@@ -123,15 +127,14 @@ def write_confidence_record(filename: str, filtered_results: list, original_text
         ]
         with open(filename, 'w') as jsonfile:
             json.dump(results_list, jsonfile, indent=2)
-        logging.info(f'PII scrubbed confidence record written to: {filename}')
-
     except Exception as e:
         logging.error(f'Error writing confidence record: {e}')
         raise
 
 
 def get_output_strategy_from_path(file_path: str) -> str:
-    """Determines the type of path based on path segments.
+    """
+    Determines the type of path based on path segments.
 
     Parameters
     ----------
@@ -154,14 +157,15 @@ def get_output_strategy_from_path(file_path: str) -> str:
         return 'page'  # Default to page
 
 
-def process_files(filepath_data: list, analyzer: AnalyzerEngine,
+def process_files(process_filepath_data: list, analyzer: AnalyzerEngine,
                   output_dir: str, threshold: float) -> defaultdict[Any, list]:
-    """Processes a list of files, scrubbing PII and writing outputs.
+    """
+    Processes a list of files, scrubbing PII and writing outputs.
 
     Parameters
     ----------
-    filepath_data : list
-        List of file data dictionaries.
+    process_filepath_data : list
+        A list of file data dictionaries.
     analyzer : AnalyzerEngine
         The Presidio analyzer engine.
     output_dir : str
@@ -174,37 +178,47 @@ def process_files(filepath_data: list, analyzer: AnalyzerEngine,
     defaultdict[Any, list]
         A dictionary containing the PII results and the filtered results.
     """
-    output_files = defaultdict(list)
-    for item in filepath_data:
-        input_file = item['output_filepath']
-        output_strategy = get_output_strategy_from_path(input_file)
+    dict_output_files = defaultdict(list)
+    for item in process_filepath_data:
+        # The output path isn't always defined in blocks.
+        if 'output_filepath' in item:
+            input_file = item['output_filepath']
+            output_strategy = get_output_strategy_from_path(input_file)
 
-        with open(str(input_file), 'r') as f:
-            orig_text = f.read()
+            with open(str(input_file), 'r') as f:
+                orig_text = f.read()
 
-        scrubbed_text, result_output = scrub_pii(orig_text, analyzer, threshold)
+            scrubbed_text, result_output = scrub_pii(orig_text, analyzer, threshold)
 
-        input_filename = os.path.basename(str(input_file))
-        filename_without_extension = os.path.splitext(input_filename)[0]
+            input_filename = os.path.basename(str(input_file))
+            filename_without_extension = os.path.splitext(input_filename)[0]
 
-        scrubbed_dir = f'{output_dir}/unstructured_text/scrubbed_{output_strategy}'
-        os.makedirs(scrubbed_dir, exist_ok=True)  # Create directory if needed
-        output_file = f'{scrubbed_dir}/{filename_without_extension}.txt'
-        write_scrubbed_txt(output_file, scrubbed_text)
-        item['scrubbed_output_filepath'] = output_file
-        output_files[output_strategy].append(output_file)
+            scrubbed_dir = f'{output_dir}/scrubbed_text/{output_strategy}/scrubbed_{output_strategy}'
+            os.makedirs(scrubbed_dir, exist_ok=True)  # Create directory if needed
+            output_file = f'{scrubbed_dir}/{filename_without_extension}.txt'
+            write_scrubbed_txt(output_file, scrubbed_text)
+            item['scrubbed_output_filepath'] = output_file
+            dict_output_files[output_strategy].append(output_file)
 
-        confidence_dir = f'{output_dir}/unstructured_text/scrubbed_confidence'
-        os.makedirs(confidence_dir, exist_ok=True)
-        confidence_file = f'{confidence_dir}/confidence-{filename_without_extension}.json'
-        write_confidence_record(confidence_file, result_output, orig_text)
-        item['scrubbed_confidence_filepath'] = confidence_file
-        output_files['confidence'].append(confidence_file)
+            confidence_dir = f'{output_dir}/scrubbed_text/{output_strategy}/scrubbed_confidence'
+            os.makedirs(confidence_dir, exist_ok=True)
+            confidence_file = f'{confidence_dir}/confidence-{filename_without_extension}.json'
+            write_confidence_record(confidence_file, result_output, orig_text)
+            item['scrubbed_confidence_filepath'] = confidence_file
+            dict_output_files['confidence'].append(confidence_file)
 
-    return output_files
+    return dict_output_files
 
 
-if __name__ == '__main__':
+def parse_args() -> argparse.Namespace:
+    """
+    Parses the required args.
+
+    Returns
+    -------
+    args: argparse.Namespace
+        The parsed args.
+    """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     parser = argparse.ArgumentParser(description='Scrub PII from text files.')
     parser.add_argument('filemap_filepath_pattern', type=str, help='Path to the filemap output.')
@@ -214,7 +228,11 @@ if __name__ == '__main__':
                         help='The config file for the NLP engine.')
     parser.add_argument('--threshold', required=False, type=float, default=0.0,
                         help='The target confidence threshold for scores.')
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+if __name__ == '__main__':
+    args = parse_args()
 
     nlp_engine = create_nlp_engine(args.config)
 
@@ -227,5 +245,3 @@ if __name__ == '__main__':
         # Update the filemap with the scrubbed files paths.
         with open(filepath, 'w') as filemap:
             json.dump(filepath_data, filemap, indent=2)
-
-        logging.info(f"Processed files: {output_files}")
