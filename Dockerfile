@@ -3,7 +3,7 @@ COPY requirements.txt .
 ENV PYTHONPATH=\/workspace
 ARG USER_ID
 RUN apt-get update -y &&\
-    apt-get -y install poppler-utils tesseract-ocr &&\
+    apt-get -y install poppler-utils tesseract-ocr yq &&\
     git clone https://github.com/tesseract-ocr/tessdata.git /usr/share/tessdata &&\
     pip install -r requirements.txt --trusted-host pypi.python.org --no-cache-dir &&\
     useradd -l -u ${USER_ID} -g sudo jenkins && \

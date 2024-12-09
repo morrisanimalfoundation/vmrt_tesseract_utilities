@@ -76,6 +76,7 @@ class TesseractOperationPage(TesseractOperationBase):
             print(f'Item {origin_path} has {len(images)} pages.')
             for pg, image in enumerate(images):
                 page_row = deepcopy(row)
+                page_row.set('page', pg + 1)
                 with tesserocr.PyTessBaseAPI('/usr/share/tessdata') as api:
                     api.SetVariable('debug_file', '/dev/null')
                     api.SetImage(image)
@@ -111,6 +112,7 @@ class TesseractOperationBlock(TesseractOperationBase):
                     boxes = api.GetComponentImages(tesserocr.RIL.TEXTLINE, True)
                     for i, (im, box, _, _) in enumerate(boxes):
                         block_row = deepcopy(row)
+                        block_row.set('block', i + 1)
                         api.SetRectangle(box['x'], box['y'], box['w'], box['h'])
                         ocr_result = api.GetUTF8Text()
                         box_confidence = api.MeanTextConf()

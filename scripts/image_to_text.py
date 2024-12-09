@@ -30,8 +30,13 @@ def get_output_strategy(output_directory: str) -> callable:
             if not os.path.exists(base_path):
                 os.makedirs(base_path)
             file_name = row.get('origin_filename')
+            count = 1
+            if 'page' in row.data:
+                count = row.get('page')
+            if 'block' in row.data:
+                count = row.get('block')
             bits = os.path.splitext(os.path.basename(file_name))
-            output_path = f'{base_path}/{bits[0]}.txt'
+            output_path = f'{base_path}/{bits[0]}-{count}.txt'
             row.set_output_file(output_path)
             with open(output_path, 'w') as f:
                 f.write(ocr_result)
@@ -83,7 +88,7 @@ def run_tesseract(args: argparse.Namespace) -> None:
         print(f'Processing item {ikey}/{args.offset + args.chunk_size} ({total_items})...')
         output += op.process_row(item_object)
     with open(f'{args.output_to}/filemap_confidence-{args.offset}-{(args.offset + args.chunk_size)}.json', 'w') as f:
-        json.dump(output, f)
+        json.dump(output, f, indent=2)
 
 
 def parse_args() -> argparse.Namespace:
@@ -97,8 +102,8 @@ def parse_args() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(
         prog='Outputs the change in two Fisher inventory files.')
-    parser.add_argument('input_file')
-    parser.add_argument('output_to')
+    parser.add_argument('input_file', help='Path to the input filemap.')
+    parser.add_argument('output_to', help='Path to the output directory.')
     parser.add_argument('--chunk_size', type=int, default=1000)
     parser.add_argument('--offset', type=int, default=0)
     parser.add_argument('--strategy', type=str, default='page')

@@ -21,6 +21,10 @@ item_keys = [
     'output_filepath',
     'output_filename',
     'output_ext',
+    'page',
+    'block',
+    'scrubbed_output_filepath',
+    'scrubbed_confidence_filepath',
 ]
 
 
