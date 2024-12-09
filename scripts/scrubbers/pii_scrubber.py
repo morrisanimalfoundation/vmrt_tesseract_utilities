@@ -181,7 +181,7 @@ def process_files(process_filepath_data: list, analyzer: AnalyzerEngine,
     """
     dict_output_files = defaultdict(list)
     for item in process_filepath_data:
-        # The output path isn't always defined in blocks.
+        # The output file path isn't always defined in blocks.
         if 'output_filepath' in item:
             input_file = item['output_filepath']
             output_strategy = get_output_strategy_from_path(input_file)

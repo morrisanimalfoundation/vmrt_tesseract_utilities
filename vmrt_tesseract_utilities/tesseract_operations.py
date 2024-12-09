@@ -97,7 +97,7 @@ class TesseractOperationPage(TesseractOperationBase):
                     ocr_result = api.GetUTF8Text()
                     page_confidence = api.MeanTextConf()
                     self.__output_ocr_data__('page', page_row, ocr_result)
-                    self.__output_scrubbed_data__('doc', page_row, ocr_result)
+                    self.__output_scrubbed_data__('page', page_row, ocr_result)
                 print(f'Item {origin_path}:{pg} had a confidence score of {page_confidence}.')
                 page_row.set('status', 'processed') \
                     .set('confidence', page_confidence)
