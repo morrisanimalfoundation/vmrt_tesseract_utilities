@@ -13,7 +13,8 @@ from presidio_anonymizer import AnonymizerEngine
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-EXCLUDE_TYPES = frozenset(['IN_PAN'])  # Use frozenset for efficient lookups
+EXCLUDE_TYPES = frozenset(['IN_PAN'])  # Use frozenset for efficient lookups.
+
 
 def create_nlp_engine(nlp_config_filename: str) -> AnalyzerEngine:
     """
@@ -42,7 +43,7 @@ def create_nlp_engine(nlp_config_filename: str) -> AnalyzerEngine:
         nlp_config_filepath = f'{script_dir}/scrubbers/config/{nlp_config_filename}'
         provider = NlpEngineProvider(conf_file=nlp_config_filepath)
         engine = provider.create_engine()
-        return AnalyzerEngine(nlp_engine=engine, supported_languages=['en'])
+        return AnalyzerEngine(nlp_engine=engine)
 
     except Exception as e:
         logging.error(f'Error creating NLP engine: {e}')

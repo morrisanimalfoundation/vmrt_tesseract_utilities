@@ -2,9 +2,11 @@ import argparse
 import json
 import os
 
-from scripts.scrubbers import pii_scrubber
 from vmrt_tesseract_utilities.report_data import ReportData
-from vmrt_tesseract_utilities.tesseract_operations import TesseractOperationDoc, TesseractOperationPage, TesseractOperationBlock
+from vmrt_tesseract_utilities.tesseract_operations import (
+    TesseractOperationBlock, TesseractOperationDoc, TesseractOperationPage)
+
+from scripts.scrubbers import pii_scrubber
 
 """
 Runs Tesseract on items in a file map to extract text and calculate confidence scores.
@@ -60,8 +62,11 @@ def get_scrubber_method(output_directory):
     """
     def scrubber_method(strategy_type: str, row: ReportData, ocr_result: str) -> None:
         if len(ocr_result) > 0:
+            # Load the proper NLP engine.
             nlp_engine = pii_scrubber.create_nlp_engine('stanford-deidentifier-base_nlp.yaml')
+            # Scrub the text.
             scrubbed_text, result_output = pii_scrubber.scrub_pii(ocr_result, nlp_engine, 0.4)
+            # Output the data from the scrubbing.
             base_path = f'{output_directory}/scrubbed_text/{strategy_type}'
             file_name = row.get('origin_filename')
             filename_without_extension = os.path.splitext(file_name)[0]
@@ -70,14 +75,12 @@ def get_scrubber_method(output_directory):
                 count = row.get('page')
             if 'block' in row.data:
                 count = row.get('block')
-
             # Write the scrubbed text to a file.
             scrubbed_dir = f'{base_path}/scrubbed_{strategy_type}'
             os.makedirs(scrubbed_dir, exist_ok=True)
             output_file = f'{scrubbed_dir}/{filename_without_extension}-{count}.txt'
             pii_scrubber.write_scrubbed_txt(output_file, scrubbed_text)
             row.set('scrubbed_output_filepath', output_file)
-
             # Write the scrubbed confidence values to a file.
             confidence_dir = f'{base_path}/scrubbed_confidence'
             os.makedirs(confidence_dir, exist_ok=True)

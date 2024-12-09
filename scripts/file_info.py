@@ -1,7 +1,7 @@
 import argparse
 import json
-import re
 import os
+import re
 
 from vmrt_tesseract_utilities.report_data import ReportData
 
