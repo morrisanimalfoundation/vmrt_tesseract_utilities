@@ -7,6 +7,7 @@ RUN apt-get update -y &&\
     git clone https://github.com/tesseract-ocr/tessdata.git /usr/share/tessdata &&\
     pip install -r requirements.txt --trusted-host pypi.python.org --no-cache-dir &&\
     useradd -l -u ${USER_ID} -g sudo jenkins && \
-    mkdir -m 0755 /home/jenkins && chown jenkins /home/jenkins
+    mkdir -m 0755 /home/jenkins && chown jenkins /home/jenkins && \
+    python -m spacy download en_core_web_sm
 USER jenkins
 WORKDIR /workspace

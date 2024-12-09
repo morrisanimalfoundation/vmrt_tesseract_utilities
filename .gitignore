@@ -10,5 +10,3 @@ data
 .DS_Store
 .env
 ./models
-/output/
-/filemap.json
