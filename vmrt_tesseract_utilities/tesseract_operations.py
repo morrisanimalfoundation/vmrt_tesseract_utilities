@@ -3,6 +3,7 @@ from copy import deepcopy
 
 import pdf2image
 import tesserocr
+from presidio_analyzer import AnalyzerEngine
 
 from vmrt_tesseract_utilities.report_data import ReportData
 
@@ -16,7 +17,7 @@ class TesseractOperationBase(ABC):
     A base operation class for further use.
     """
 
-    def __init__(self, output_strategy=None, scrubber_method=None):
+    def __init__(self, output_strategy=None, scrubber_method=None, nlp_engine=None):
         if output_strategy is not None and not callable(output_strategy):
             raise TypeError('output_strategy must be callable or None.')
         self.output_strategy = output_strategy
@@ -25,14 +26,18 @@ class TesseractOperationBase(ABC):
             raise TypeError('scrubber_method must be callable or None.')
         self.scrubber_method = scrubber_method
 
+        if nlp_engine is not None and not isinstance(nlp_engine, AnalyzerEngine):
+            raise TypeError('nlp_engine should be an AnalyzerEngine instance.')
+        self.nlp_engine = nlp_engine
+
     def __output_ocr_data__(self, strategy_type: str, row: ReportData, ocr_output: str):
         if self.output_strategy is not None:
             # If we have an output strategy, call it.
             self.output_strategy(strategy_type, row, ocr_output)
 
     def __output_scrubbed_data__(self, strategy_type: str, row: ReportData, ocr_output: str):
-        if self.scrubber_method is not None:
-            return self.scrubber_method(strategy_type, row, ocr_output)
+        if self.scrubber_method is not None and self.nlp_engine is not None:
+            return self.scrubber_method(strategy_type, row, ocr_output, self.nlp_engine)
 
     @abstractmethod
     def process_row(self, row: ReportData) -> list:

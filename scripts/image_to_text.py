@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 
+from presidio_analyzer import AnalyzerEngine
 from vmrt_tesseract_utilities.report_data import ReportData
 from vmrt_tesseract_utilities.tesseract_operations import (
     TesseractOperationBlock, TesseractOperationDoc, TesseractOperationPage)
@@ -60,10 +61,8 @@ def get_scrubber_method(output_directory):
     scrubber_method: callable
       The callable strategy function.
     """
-    def scrubber_method(strategy_type: str, row: ReportData, ocr_result: str) -> None:
+    def scrubber_method(strategy_type: str, row: ReportData, ocr_result: str, nlp_engine: AnalyzerEngine) -> None:
         if len(ocr_result) > 0:
-            # Load the proper NLP engine.
-            nlp_engine = pii_scrubber.create_nlp_engine('stanford-deidentifier-base_nlp.yaml')
             # Scrub the text.
             scrubbed_text, result_output = pii_scrubber.scrub_pii(ocr_result, nlp_engine, 0.4)
             # Output the data from the scrubbing.
@@ -108,12 +107,14 @@ def run_tesseract(args: argparse.Namespace) -> None:
     print(f'Here we go with strategy: {args.strategy}')
     output_strategy = get_output_strategy(args.output_to)
     scrubber_method = get_scrubber_method(args.output_to)
+    # Load the proper NLP engine.
+    nlp_engine = pii_scrubber.create_nlp_engine('stanford-deidentifier-base_nlp.yaml')
     if args.strategy == 'doc':
-        op = TesseractOperationDoc(output_strategy, scrubber_method)
+        op = TesseractOperationDoc(output_strategy, scrubber_method, nlp_engine)
     if args.strategy == 'page':
-        op = TesseractOperationPage(output_strategy, scrubber_method)
+        op = TesseractOperationPage(output_strategy, scrubber_method, nlp_engine)
     if args.strategy == 'block':
-        op = TesseractOperationBlock(output_strategy, scrubber_method)
+        op = TesseractOperationBlock(output_strategy, scrubber_method, nlp_engine)
     with open(args.input_file) as f:
         json_map = json.load(f)
     total_items = len(json_map)
