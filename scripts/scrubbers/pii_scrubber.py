@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 EXCLUDE_TYPES = frozenset(['IN_PAN'])  # Use frozenset for efficient lookups.
 
 
-def create_nlp_engine(nlp_config_filename: str) -> AnalyzerEngine:
+def create_nlp_engine(nlp_config_file: str) -> AnalyzerEngine:
     """
     Creates and configures a Presidio AnalyzerEngine.
 
@@ -25,7 +25,7 @@ def create_nlp_engine(nlp_config_filename: str) -> AnalyzerEngine:
 
     Parameters
     ----------
-    nlp_config_filename : str
+    nlp_config_file : str
         The filename of the YAML configuration file for the NLP engine.
 
     Returns
@@ -39,9 +39,7 @@ def create_nlp_engine(nlp_config_filename: str) -> AnalyzerEngine:
         If any error occurs during the creation of the NLP engine.
     """
     try:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        nlp_config_filepath = f'{script_dir}/scrubbers/config/{nlp_config_filename}'
-        provider = NlpEngineProvider(conf_file=nlp_config_filepath)
+        provider = NlpEngineProvider(conf_file=nlp_config_file)
         engine = provider.create_engine()
         return AnalyzerEngine(nlp_engine=engine)
 

@@ -106,9 +106,14 @@ def run_tesseract(args: argparse.Namespace) -> None:
         raise ValueError("'--strategy' must be either 'doc', 'page' or 'block'")
     print(f'Here we go with strategy: {args.strategy}')
     output_strategy = get_output_strategy(args.output_to)
-    scrubber_method = get_scrubber_method(args.output_to)
-    # Load the proper NLP engine.
-    nlp_engine = pii_scrubber.create_nlp_engine('stanford-deidentifier-base_nlp.yaml')
+    # Add the scrubber if needed.
+    if args.scrub_text and args.scrub_config is not None:
+        scrubber_method = get_scrubber_method(args.output_to)
+        # Load the proper NLP engine.
+        nlp_engine = pii_scrubber.create_nlp_engine(args.scrub_config)
+    else:
+        scrubber_method = None
+        nlp_engine = None
     if args.strategy == 'doc':
         op = TesseractOperationDoc(output_strategy, scrubber_method, nlp_engine)
     if args.strategy == 'page':
@@ -156,6 +161,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--chunk_size', type=int, default=1000)
     parser.add_argument('--offset', type=int, default=0)
     parser.add_argument('--strategy', type=str, default='page')
+    parser.add_argument('--scrub_text', type=bool, default=False)
+    parser.add_argument('--scrub_config', type=str, default=None, help='The config file for the NLP engine.')
     return parser.parse_args()
 
 

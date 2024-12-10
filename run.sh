@@ -8,7 +8,7 @@ IMAGE_NAME="registry.gitlab.com/morrisanimalfoundation/grls:vmrt-tesseract-utili
 
 # Build the image with our special build args.
 # These matter more on Jenkins, but need to be placeheld anyway.
-docker image build -t $IMAGE_NAME --build-arg USER_ID=$(id -u ${USER}) .
+docker image build -t $IMAGE_NAME --cache-from $IMAGE_NAME --cache-to type=inline --build-arg USER_ID=$(id -u ${USER}) .
 
 
 # Run the container in a disposable manner.

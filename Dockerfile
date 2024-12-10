@@ -8,6 +8,7 @@ RUN apt-get update -y &&\
     pip install -r requirements.txt --trusted-host pypi.python.org --no-cache-dir &&\
     useradd -l -u ${USER_ID} -g sudo jenkins && \
     mkdir -m 0755 /home/jenkins && chown jenkins /home/jenkins && \
-    python -m spacy download en_core_web_sm en_core_web_lg
+    python -m spacy download en_core_web_sm && \
+    python -m spacy download en_core_web_lg
 USER jenkins
 WORKDIR /workspace
