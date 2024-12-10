@@ -3,6 +3,7 @@ from copy import deepcopy
 
 import pdf2image
 import tesserocr
+from presidio_analyzer import AnalyzerEngine
 
 from vmrt_tesseract_utilities.report_data import ReportData
 
@@ -16,15 +17,27 @@ class TesseractOperationBase(ABC):
     A base operation class for further use.
     """
 
-    def __init__(self, output_strategy=None):
+    def __init__(self, output_strategy=None, scrubber_method=None, nlp_engine=None):
         if output_strategy is not None and not callable(output_strategy):
             raise TypeError('output_strategy must be callable or None.')
         self.output_strategy = output_strategy
+
+        if scrubber_method is not None and not callable(scrubber_method):
+            raise TypeError('scrubber_method must be callable or None.')
+        self.scrubber_method = scrubber_method
+
+        if nlp_engine is not None and not isinstance(nlp_engine, AnalyzerEngine):
+            raise TypeError('nlp_engine should be an AnalyzerEngine instance.')
+        self.nlp_engine = nlp_engine
 
     def __output_ocr_data__(self, strategy_type: str, row: ReportData, ocr_output: str):
         if self.output_strategy is not None:
             # If we have an output strategy, call it.
             self.output_strategy(strategy_type, row, ocr_output)
+
+    def __output_scrubbed_data__(self, strategy_type: str, row: ReportData, ocr_output: str):
+        if self.scrubber_method is not None and self.nlp_engine is not None:
+            return self.scrubber_method(strategy_type, row, ocr_output, self.nlp_engine)
 
     @abstractmethod
     def process_row(self, row: ReportData) -> list:
@@ -60,6 +73,7 @@ class TesseractOperationDoc(TesseractOperationBase):
             doc_row.set('status', 'error')
             print(str(e))
         self.__output_ocr_data__('doc', doc_row, page_content)
+        self.__output_scrubbed_data__('doc', doc_row, page_content)
         return [doc_row]
 
 
@@ -76,12 +90,14 @@ class TesseractOperationPage(TesseractOperationBase):
             print(f'Item {origin_path} has {len(images)} pages.')
             for pg, image in enumerate(images):
                 page_row = deepcopy(row)
+                page_row.set('page', pg + 1)
                 with tesserocr.PyTessBaseAPI('/usr/share/tessdata') as api:
                     api.SetVariable('debug_file', '/dev/null')
                     api.SetImage(image)
                     ocr_result = api.GetUTF8Text()
                     page_confidence = api.MeanTextConf()
                     self.__output_ocr_data__('page', page_row, ocr_result)
+                    self.__output_scrubbed_data__('page', page_row, ocr_result)
                 print(f'Item {origin_path}:{pg} had a confidence score of {page_confidence}.')
                 page_row.set('status', 'processed') \
                     .set('confidence', page_confidence)
@@ -111,10 +127,12 @@ class TesseractOperationBlock(TesseractOperationBase):
                     boxes = api.GetComponentImages(tesserocr.RIL.TEXTLINE, True)
                     for i, (im, box, _, _) in enumerate(boxes):
                         block_row = deepcopy(row)
+                        block_row.set('block', i + 1)
                         api.SetRectangle(box['x'], box['y'], box['w'], box['h'])
                         ocr_result = api.GetUTF8Text()
                         box_confidence = api.MeanTextConf()
                         self.__output_ocr_data__('block', block_row, ocr_result)
+                        self.__output_scrubbed_data__('block', block_row, ocr_result)
                         print(f'Item {origin_path}:{pg}:{i} had a confidence score of {box_confidence}.')
                         block_row.set('status', 'processed') \
                             .set('confidence', box_confidence)
