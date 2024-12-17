@@ -3,11 +3,11 @@ import json
 import os
 
 from presidio_analyzer import AnalyzerEngine
+
+from scripts.scrubbers import pii_scrubber
 from vmrt_tesseract_utilities.report_data import ReportData
 from vmrt_tesseract_utilities.tesseract_operations import (
     TesseractOperationBlock, TesseractOperationDoc, TesseractOperationPage)
-
-from scripts.scrubbers import pii_scrubber
 
 """
 Runs Tesseract on items in a file map to extract text and calculate confidence scores.

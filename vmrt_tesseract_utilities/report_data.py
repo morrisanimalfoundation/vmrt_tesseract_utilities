@@ -4,7 +4,6 @@ from typing import Self
 # Required for object serialization.
 import json_fix
 
-
 """
 Provides a serializable, validated ReportData object.
 """
@@ -50,7 +49,7 @@ class ReportData:
         return self
 
     def set(self, key, value):
-        if not key in item_keys:
+        if key not in item_keys:
             raise RuntimeError(f'Invalid data key: {key}')
         self.data[key] = value
         return self
