@@ -6,7 +6,9 @@ build-backend = "setuptools.build_meta"
 name = "vmrt_tesseract_utilities"
 version = "1.0"
 description = "A utility script for extracting text and scrubbing PII from EMR data."
-packages=["vmrt_tesseract_utilities"]
 authors = [
   {name = "Morris Animal Foundation", email = "information-systems@morrisanimalfoundation.org"},
 ]
+
+[tool.setuptools]
+packages=["vmrt_tesseract_utilities"]

@@ -1,0 +1,23 @@
+services:
+  vmrt-emr-process-log-mysql:
+    container_name: vmrt-emr-process-log-mysql
+    image: mysql:8.0
+    command: --default-authentication-plugin=mysql_native_password
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: bmorris
+  vmrt-emr-workspace:
+    container_name: vmrt-emr-workspace
+    build: .
+    command: tail -f /dev/null
+    volumes:
+      - ./:/workspace
+      - emr-source:/data
+
+volumes:
+  emr-source:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: "$HOME/MAF\ Dropbox/GRLS/Operations/ENROLLED\ DOGS"

@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 
-# Should provide the directory where this script lives in most cases.
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+docker compose build --build-arg USER_ID=$(id -u ${USER})
 
-# The name of our image from the Gitlab Container Registry.
-IMAGE_NAME="registry.gitlab.com/morrisanimalfoundation/grls:vmrt-tesseract-utilities"
+docker compose up -d
 
-# Build the image with our special build args.
-# These matter more on Jenkins, but need to be placeheld anyway.
-docker image build -t $IMAGE_NAME --cache-from $IMAGE_NAME --cache-to type=inline --build-arg USER_ID=$(id -u ${USER}) .
+until $(docker exec -i vmrt-emr-process-log-mysql mysql -uroot -pbmorris -e "DROP DATABASE IF EXISTS vmrt_emr_transcription; CREATE DATABASE vmrt_emr_transcription;"); do
+  echo 'Waiting for database container to start...'
+  sleep 1
+done
 
+echo 'Done!'
 
-# Run the container in a disposable manner.
-# Add a volume to the current working dir.
-docker run --rm -it -v $HOME/MAF\ Dropbox/GRLS/Operations/ENROLLED\ DOGS:/data -v $SCRIPT_DIR:/workspace -v $HOME/.ssh:/home/jenkins/.ssh $IMAGE_NAME bash
+docker exec -t vmrt-emr-workspace python /workspace/update.py
+
+docker exec -it vmrt-emr-workspace bash
