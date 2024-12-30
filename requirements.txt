@@ -1,5 +1,7 @@
 flake8==7.1.1
 isort==5.13.2
 mccabe==0.7.0
+presidio_analyzer==2.2.355
 pycodestyle==2.12.1
 pyflakes==3.2.0
+textract-py3==2.1.0

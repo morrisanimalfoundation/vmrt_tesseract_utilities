@@ -1,10 +1,13 @@
 import argparse
 import json
 import os
+import sys
 
 from presidio_analyzer import AnalyzerEngine
 
 from scripts.scrubbers import pii_scrubber
+# Import textract-py3 instead of textract
+import textract as textract_py3
 from vmrt_tesseract_utilities.report_data import ReportData
 from vmrt_tesseract_utilities.tesseract_operations import (
     TesseractOperationBlock, TesseractOperationDoc, TesseractOperationPage)
@@ -145,6 +148,64 @@ def run_tesseract(args: argparse.Namespace) -> None:
         json.dump(output, f, indent=2)
 
 
+def run_textract(args: argparse.Namespace) -> list[str]:
+    """
+    Runs Tesseract OCR on a list of JSON objects describing files.
+
+    Extracts text from each file and saves it to a separate output file,
+    preventing overwriting of existing files. Uses textract-py3 for
+    compatibility with Python 3.11.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        The arguments from the command line interface.
+        Must include `input_file` (path to the JSON file) and
+        `output_to` (base output directory).
+
+    Returns
+    -------
+    list[str]
+        A list of errors, if there are any.
+    """
+
+    with open(args.input_file) as f:
+        json_map = json.load(f)
+
+    output_directory = os.path.join(args.output_to, "textract-pdftotext")
+    os.makedirs(output_directory, exist_ok=True)
+
+    errors = []
+    for item in json_map:
+        filepath = item.get('origin_filepath')
+        filename = item.get('origin_filename')
+        extension = item.get('origin_ext').lower()
+        text = None
+
+        try:
+            # Try pdfplumber first.
+            if  extension == 'pdf':
+                kwargs = {'method': 'pdfminer', 'language': 'eng'}
+                text = textract_py3.process(filepath, **kwargs).decode('utf-8')
+            # Use tesseract if we didn't get much yet.
+            if text is None or len(text) < 10:
+                kwargs = {'method': 'tesseract', 'language': 'eng'}
+                # Use textract_py3 for text extraction if we didn't get good results yet.
+                text = textract_py3.process(filepath, **kwargs).decode('utf-8')
+
+            split_filename = os.path.splitext(filename)
+            output_filename = f'{split_filename[0]}-{extension}.txt'
+            output_filepath = os.path.join(output_directory, output_filename)
+
+            with open(output_filepath, "w", encoding="utf-8") as f:
+                f.write(text)
+
+        except Exception as e:
+            errors.append(f"Error processing {filename}: {e}")
+
+    return errors
+
+
 def parse_args() -> argparse.Namespace:
     """
     Calculates Tesseract confidence scores for a list of file describing JSON objects, outputting modified JSON.
@@ -168,4 +229,9 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == '__main__':
     provided_args = parse_args()
-    run_tesseract(provided_args)
+    # run_tesseract(provided_args)
+    txt_errors = run_textract(provided_args)
+    if txt_errors:
+        for e in txt_errors:
+            print(e)
+        sys.exit(1)
