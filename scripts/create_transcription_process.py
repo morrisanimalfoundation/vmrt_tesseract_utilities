@@ -14,7 +14,19 @@ Populates the transcription process log table with files to process and their re
 dog_id_re = r"(094-[0-9]{6})"
 
 
-def do_create_transcription_process(args: argparse.Namespace) -> list:
+def do_create_transcription_process(args: argparse.Namespace) -> None:
+    """
+    Creates rows for a new transcription process.
+
+    Notes
+    -----
+    These input assets may then be picked up by future processes.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        The parsed args.
+    """
     stdout_logger.info(f'Creating new transcription process with strategy "{args.document_type}".')
     assets = []
     with Session(get_engine(echo=args.debug_sql)) as session:
