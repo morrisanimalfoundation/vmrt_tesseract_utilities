@@ -72,29 +72,30 @@ def run_tesseract(args: argparse.Namespace) -> None:
     if args.document_type == 'block':
         op = TesseractOperationBlock()
     session = Session(get_engine(echo=args.debug_sql))
-    sub_query = (session.query(TranscriptionOutput.input_id)
-                 .where(TranscriptionOutput.ocr_output_file != None))
-    query = (session.query(TranscriptionInput)
+    query = (session.query(TranscriptionInput, TranscriptionOutput)
+             .outerjoin(TranscriptionInput.assets)
              .where(TranscriptionInput.input_file.like('%.pdf'))
              .where(TranscriptionInput.document_type == args.document_type)
-             .where(TranscriptionInput.id.notin_(sub_query))
+             .where(TranscriptionOutput.ocr_output_file == None)
              .limit(args.chunk_size)
              .offset(args.offset))
     count = query.count()
     stdout_logger.info(f'Found {count} files to transcribe.')
-    db_output_logs = []
-    for row in query.all():
-        output = op.process_row(row.input_file)
+    for db_input, db_output in query.all():
+        db_output_logs = []
+        output = op.process_row(db_input.input_file)
         for ocr_result in output:
-            bits = os.path.splitext(os.path.basename(row.input_file))
+            bits = os.path.splitext(os.path.basename(db_input.input_file))
             output_path = f'{base_path}/{bits[0]}-{ocr_result["page"]}-{ocr_result["block"]}.txt'
             _write_file(output_path, ocr_result['content'])
-            db_output_logs.append(
-                TranscriptionOutput(ocr_output_file=output_path,
-                                    ocr_confidence=ocr_result['confidence'],
-                                    transcription_input=row))
-    session.add_all(db_output_logs)
-    session.commit()
+            if db_output is None:
+                db_output = TranscriptionOutput()
+            db_output.ocr_output_file = output_path
+            db_output.ocr_confidence = ocr_result['confidence']
+            db_output.transcription_input = db_input
+            db_output_logs.append(db_output)
+            session.add_all(db_output_logs)
+            session.commit()
     stdout_logger.info('All done!')
 
 
