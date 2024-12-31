@@ -84,12 +84,12 @@ def get_engine(**kwargs) -> engine.Engine:
 
     Returns
     -------
-
-
+    _engine : sqlalchemy.engine.Engine
+      The database connection.
     """
     global _engine
     if _engine is None:
-        sql_url = os.environ('SQL_CONNECTION_STRING')
+        sql_url = os.getenv('SQL_CONNECTION_STRING')
         if sql_url is None:
             RuntimeError('SQL_CONNECTION_STRING environment variable is not set.')
         _engine = create_engine(sql_url, **kwargs)

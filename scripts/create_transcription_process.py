@@ -13,10 +13,11 @@ Populates the transcription process log table with files to process and their re
 # Pattern to match and extract the dog id.
 dog_id_re = r"(094-[0-9]{6})"
 
+
 def do_create_transcription_process(args: argparse.Namespace) -> list:
     stdout_logger.info(f'Creating new transcription process with strategy "{args.document_type}".')
     assets = []
-    with Session(get_engine(echo=True)) as session:
+    with Session(get_engine(echo=args.debug_sql)) as session:
         for subdir, dirs, files in os.walk(args.path_to_describe):
             dog_match = re.search(dog_id_re, subdir)
             if dog_match:
@@ -50,6 +51,7 @@ def parse_args() -> argparse.Namespace:
         prog='Creates a new transcription process by scanning a directory of medical records.',)
     parser.add_argument('path_to_describe')
     parser.add_argument('--document_type', default='document')
+    parser.add_argument('--debug-sql', type=bool, default=False)
     return parser.parse_args()
 
 
