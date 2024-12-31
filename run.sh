@@ -14,3 +14,5 @@ echo 'Done!'
 docker exec -t vmrt-emr-workspace python /workspace/update.py
 
 docker exec -it vmrt-emr-workspace bash
+
+docker compose down
