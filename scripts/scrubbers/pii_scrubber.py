@@ -7,7 +7,7 @@ from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_anonymizer import AnonymizerEngine
 from sqlalchemy.orm import Session
 
-from vmrt_tesseract_utilities.stdout_logger import stdout_logger
+from vmrt_tesseract_utilities.logging import stdout_logger
 from vmrt_tesseract_utilities.database import TranscriptionInput, TranscriptionOutput, get_engine
 
 """

@@ -20,7 +20,6 @@ chmod +x "${SCRIPT_DIR}/install_spacy_models.sh"
 /bin/bash "${SCRIPT_DIR}/install_spacy_models.sh"
 
 python "${SCRIPT_DIR}/pii_scrubber.py" \
-      /workspace/output/filemap*.json \
       "$OUTPUT_DIR" \
       --config="${SCRIPT_DIR}/config/stanford-deidentifier-base_nlp.yaml" \
       --threshold=0.45

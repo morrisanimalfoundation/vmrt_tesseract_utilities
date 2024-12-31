@@ -9,8 +9,8 @@ RUN apt-get update -y && \
     useradd -l -u ${USER_ID} -g sudo jenkins && \
     mkdir -m 0755 /home/jenkins && chown jenkins /home/jenkins
 USER jenkins
-RUN pip install -r full.txt -r requirements.txt --trusted-host pypi.python.org --no-cache-dir
-    #python -m spacy download en_core_web_sm && \
-    #python -m spacy download en_core_web_lg
+RUN pip install -r full.txt -r requirements.txt --trusted-host pypi.python.org --no-cache-dir &&\
+    python -m spacy download en_core_web_sm && \
+    python -m spacy download en_core_web_lg
 ENV PATH="/home/jenkins/.local/bin:$PATH"
 WORKDIR /workspace
