@@ -3,8 +3,9 @@ import os
 
 from sqlalchemy.orm import Session
 
+from vmrt_tesseract_utilities.database import (TranscriptionInput,
+                                               TranscriptionOutput, get_engine)
 from vmrt_tesseract_utilities.logging import stdout_logger
-from vmrt_tesseract_utilities.database import TranscriptionInput, TranscriptionOutput, get_engine
 from vmrt_tesseract_utilities.tesseract_operations import (
     TesseractOperationBlock, TesseractOperationDoc, TesseractOperationPage)
 
@@ -76,7 +77,7 @@ def run_tesseract(args: argparse.Namespace) -> None:
              .outerjoin(TranscriptionInput.assets)
              .where(TranscriptionInput.input_file.like('%.pdf'))
              .where(TranscriptionInput.document_type == args.document_type)
-             .where(TranscriptionOutput.ocr_output_file == None)
+             .where(TranscriptionOutput.ocr_output_file == None)  # noqa: E711
              .limit(args.chunk_size)
              .offset(args.offset))
     count = query.count()

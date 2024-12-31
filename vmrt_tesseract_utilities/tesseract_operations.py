@@ -5,7 +5,6 @@ import tesserocr
 
 from vmrt_tesseract_utilities.logging import stdout_logger
 
-
 """
 Provides Tesseract processing with different output scales (document, page, block).
 """
@@ -26,7 +25,6 @@ class TesseractOperationDoc(TesseractOperationBase):
     Returns Tesseract results for entire documents.
     """
     def process_row(self, input_path: str) -> list:
-        page_content = ''
         output = []
         try:
             images = pdf2image.convert_from_path(input_path)

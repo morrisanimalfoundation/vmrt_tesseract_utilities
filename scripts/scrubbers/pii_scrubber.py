@@ -7,8 +7,9 @@ from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_anonymizer import AnonymizerEngine
 from sqlalchemy.orm import Session
 
+from vmrt_tesseract_utilities.database import (TranscriptionInput,
+                                               TranscriptionOutput, get_engine)
 from vmrt_tesseract_utilities.logging import stdout_logger
-from vmrt_tesseract_utilities.database import TranscriptionInput, TranscriptionOutput, get_engine
 
 """
 Leverages presidio to attempt automatic PII stripping.

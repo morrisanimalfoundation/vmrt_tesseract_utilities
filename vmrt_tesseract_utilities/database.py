@@ -1,10 +1,11 @@
 import datetime
 import os
-
 from typing import List, Optional
-from sqlalchemy import ForeignKey, create_engine, String, DateTime, Float, Integer, func, engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
 from dotenv import load_dotenv
+from sqlalchemy import (DateTime, Float, ForeignKey, Integer, String,
+                        create_engine, engine, func)
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 load_dotenv()
 

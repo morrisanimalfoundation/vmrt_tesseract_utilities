@@ -17,6 +17,7 @@ dnspython==2.6.1
 easygui==0.98.3
 ebcdic==1.1.1
 email_validator==2.1.1
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl#sha256=1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85
 extract-msg==0.48.7
 fhir.resources==7.1.0
 filelock==3.16.1

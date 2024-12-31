@@ -3,7 +3,10 @@ import os
 import re
 
 from sqlalchemy.orm import Session
-from vmrt_tesseract_utilities.database import TranscriptionInput, TranscriptionMetadata, get_engine
+
+from vmrt_tesseract_utilities.database import (TranscriptionInput,
+                                               TranscriptionMetadata,
+                                               get_engine)
 from vmrt_tesseract_utilities.logging import stdout_logger
 
 """
