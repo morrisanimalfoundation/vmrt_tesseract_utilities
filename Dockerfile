@@ -1,6 +1,5 @@
 FROM python:3.11
 COPY requirements.txt .
-COPY requirements/full.txt .
 ENV PYTHONPATH=\/workspace
 ARG USER_ID
 RUN apt-get update -y && \
