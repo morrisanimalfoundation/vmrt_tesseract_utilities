@@ -1,17 +1,18 @@
 import argparse
-import glob
 import json
-import logging
 import os
-from collections import defaultdict
-from typing import Any
 
 from presidio_analyzer import AnalyzerEngine, RecognizerResult
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_anonymizer import AnonymizerEngine
+from sqlalchemy.orm import Session
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+from vmrt_tesseract_utilities.stdout_logger import stdout_logger
+from vmrt_tesseract_utilities.database import TranscriptionInput, TranscriptionOutput, get_engine
+
+"""
+Leverages presidio to attempt automatic PII stripping.
+"""
 
 EXCLUDE_TYPES = frozenset(['IN_PAN'])  # Use frozenset for efficient lookups.
 
@@ -44,7 +45,7 @@ def create_nlp_engine(nlp_config_file: str) -> AnalyzerEngine:
         return AnalyzerEngine(nlp_engine=engine)
 
     except Exception as e:
-        logging.error(f'Error creating NLP engine: {e}')
+        stdout_logger.error(f'Error creating NLP engine: {e}')
         raise
 
 
@@ -77,7 +78,7 @@ def scrub_pii(text: str, analyzer: AnalyzerEngine, threshold: float) -> tuple[st
         return anonymized_results.text, cleaned_results
 
     except Exception as e:
-        logging.error(f'Error scrubbing PII: {e}')
+        stdout_logger.error(f'Error scrubbing PII: {e}')
         raise
 
 
@@ -97,7 +98,7 @@ def write_scrubbed_txt(output_filename: str, anonymized_text: str) -> None:
             with open(output_filename, 'w') as f:
                 f.write(anonymized_text)
     except Exception as e:
-        logging.error(f'Error writing scrubbed output: {e}')
+        stdout_logger.error(f'Error writing scrubbed output: {e}')
         raise
 
 
@@ -127,7 +128,7 @@ def write_confidence_record(filename: str, filtered_results: list, original_text
         with open(filename, 'w') as jsonfile:
             json.dump(results_list, jsonfile, indent=2)
     except Exception as e:
-        logging.error(f'Error writing confidence record: {e}')
+        stdout_logger.error(f'Error writing confidence record: {e}')
         raise
 
 
@@ -157,7 +158,7 @@ def get_output_strategy_from_path(file_path: str) -> str:
 
 
 def process_files(process_filepath_data: list, analyzer: AnalyzerEngine,
-                  output_dir: str, threshold: float) -> defaultdict[Any, list]:
+                  output_dir: str, threshold: float) -> None:
     """
     Processes a list of files, scrubbing PII and writing outputs.
 
@@ -171,42 +172,38 @@ def process_files(process_filepath_data: list, analyzer: AnalyzerEngine,
         The output directory to save files to.
     threshold : float
         The confidence threshold for PII detection.
-
-    Returns
-    -------
-    defaultdict[Any, list]
-        A dictionary containing the PII results and the filtered results.
     """
-    dict_output_files = defaultdict(list)
-    for item in process_filepath_data:
-        # The output file path isn't always defined in blocks.
-        if 'output_filepath' in item:
-            input_file = item['output_filepath']
-            output_strategy = get_output_strategy_from_path(input_file)
+    for output_log in process_filepath_data:
+        with open(str(output_log.ocr_output_file), 'r') as f:
+            orig_text = f.read()
+        scrubbed_text, result_output = scrub_pii(orig_text, analyzer, threshold)
+        input_filename = os.path.basename(str(output_log.ocr_output_file))
+        filename_without_extension = os.path.splitext(input_filename)[0]
+        scrubbed_dir = f'{output_dir}/scrubbed_text/{args.document_type}/scrubbed_{args.document_type}'
+        os.makedirs(scrubbed_dir, exist_ok=True)  # Create directory if needed
+        output_file = f'{scrubbed_dir}/{filename_without_extension}.txt'
+        write_scrubbed_txt(output_file, scrubbed_text)
+        output_log.pii_scrubber_output_file = output_file
+        confidence_dir = f'{output_dir}/scrubbed_text/{args.document_type}/scrubbed_confidence'
+        os.makedirs(confidence_dir, exist_ok=True)
+        confidence_file = f'{confidence_dir}/confidence-{filename_without_extension}.json'
+        output_log.pii_scrubber_confidence_file = confidence_file
+        write_confidence_record(confidence_file, result_output, orig_text)
+        session = Session(get_engine(echo=args.debug_sql))
+        session.add(output_log)
+        session.commit()
 
-            with open(str(input_file), 'r') as f:
-                orig_text = f.read()
 
-            scrubbed_text, result_output = scrub_pii(orig_text, analyzer, threshold)
-
-            input_filename = os.path.basename(str(input_file))
-            filename_without_extension = os.path.splitext(input_filename)[0]
-
-            scrubbed_dir = f'{output_dir}/scrubbed_text/{output_strategy}/scrubbed_{output_strategy}'
-            os.makedirs(scrubbed_dir, exist_ok=True)  # Create directory if needed
-            output_file = f'{scrubbed_dir}/{filename_without_extension}.txt'
-            write_scrubbed_txt(output_file, scrubbed_text)
-            item['scrubbed_output_filepath'] = output_file
-            dict_output_files[output_strategy].append(output_file)
-
-            confidence_dir = f'{output_dir}/scrubbed_text/{output_strategy}/scrubbed_confidence'
-            os.makedirs(confidence_dir, exist_ok=True)
-            confidence_file = f'{confidence_dir}/confidence-{filename_without_extension}.json'
-            write_confidence_record(confidence_file, result_output, orig_text)
-            item['scrubbed_confidence_filepath'] = confidence_file
-            dict_output_files['confidence'].append(confidence_file)
-
-    return dict_output_files
+def get_files_to_process(args: argparse.Namespace) -> list:
+    session = Session(get_engine(echo=args.debug_sql))
+    query = (session.query(TranscriptionOutput)
+             .outerjoin(TranscriptionInput.assets)
+             .where(TranscriptionInput.document_type == args.document_type)
+             .where(TranscriptionOutput.ocr_output_file != None)
+             .where(TranscriptionOutput.pii_scrubber_output_file == None)
+             .limit(args.chunk_size)
+             .offset(args.offset))
+    return query.all()
 
 
 def parse_args() -> argparse.Namespace:
@@ -220,8 +217,11 @@ def parse_args() -> argparse.Namespace:
     """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     parser = argparse.ArgumentParser(description='Scrub PII from text files.')
-    parser.add_argument('filemap_filepath_pattern', type=str, help='Path to the filemap output.')
-    parser.add_argument('output_to', type=str, help='The output directory to save files to.')
+    parser.add_argument('output_to', help='Path to the output directory.')
+    parser.add_argument('--document-type', type=str, default='document')
+    parser.add_argument('--chunk-size', type=int, default=1000)
+    parser.add_argument('--offset', type=int, default=0)
+    parser.add_argument('--debug-sql', type=bool, default=False)
     parser.add_argument('--config', required=False, type=str,
                         default=f'{script_dir}/config/stanford-deidentifier-base_nlp.yaml',
                         help='The config file for the NLP engine.')
@@ -232,15 +232,6 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == '__main__':
     args = parse_args()
-
+    db_output_logs = get_files_to_process(args)
     nlp_engine = create_nlp_engine(args.config)
-
-    for filepath in glob.glob(args.filemap_filepath_pattern):
-        with open(filepath, 'r') as f:
-            filepath_data = json.load(f)
-
-        output_files = process_files(filepath_data, nlp_engine, args.output_to, args.threshold)
-
-        # Update the filemap with the scrubbed files paths.
-        with open(filepath, 'w') as filemap:
-            json.dump(filepath_data, filemap, indent=2)
+    process_files(db_output_logs, nlp_engine, args.output_to, args.threshold)
