@@ -1,16 +1,47 @@
 #!/usr/bin/env bash
 
-# Should provide the directory where this script lives in most cases.
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+# Exit on Error.
+set -e
 
-# The name of our image from the Gitlab Container Registry.
-IMAGE_NAME="registry.gitlab.com/morrisanimalfoundation/grls:vmrt-tesseract-utilities"
+# Read our .env file.
+export $(grep -v '^#' .env | xargs)
 
-# Build the image with our special build args.
-# These matter more on Jenkins, but need to be placeheld anyway.
-docker image build -t $IMAGE_NAME --cache-from $IMAGE_NAME --cache-to type=inline --build-arg USER_ID=$(id -u ${USER}) .
+if [[ -z $SQL_PASSWORD ]]; then
+  echo "Error: Please set the SQL_PASSWORD variable in your .env file."
+  exit 1
+fi
 
 
-# Run the container in a disposable manner.
-# Add a volume to the current working dir.
-docker run --rm -it -v $HOME/MAF\ Dropbox/GRLS/Operations/ENROLLED\ DOGS:/data -v $SCRIPT_DIR:/workspace -v $HOME/.ssh:/home/jenkins/.ssh $IMAGE_NAME bash
+# Build the Docker images with the current user's ID.
+docker compose build --build-arg USER_ID=$(id -u ${USER})
+
+# Start the containers in detached mode.
+docker compose up -d
+
+# Wait for the database container to start (with a timeout).
+TIMEOUT=30
+COUNTER=0
+until $(docker exec -i vmrt-emr-process-log-mysql mysql -uroot -p$SQL_PASSWORD -e "DROP DATABASE IF EXISTS vmrt_emr_transcription; CREATE DATABASE vmrt_emr_transcription;") || [[ $COUNTER -eq $TIMEOUT ]]; do
+  echo "Waiting for database container to start... ($COUNTER/$TIMEOUT)"
+  sleep 1
+  COUNTER=$((COUNTER+1))
+done
+
+if [[ $COUNTER -eq $TIMEOUT ]]; then
+  echo "Error: Timeout waiting for database container."
+  exit 1
+fi
+
+echo "Database initialized successfully."
+
+# Execute the Python script.
+if ! docker exec -t vmrt-emr-workspace python ./scripts/database_setup.py install; then
+  echo "Error: Failed to execute Python script."
+  exit 1
+fi
+
+# Provide an interactive Bash shell within the container.
+docker exec -it vmrt-emr-workspace bash
+
+# Stop and remove the containers.
+docker compose down
