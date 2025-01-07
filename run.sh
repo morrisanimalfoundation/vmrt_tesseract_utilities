@@ -6,6 +6,12 @@ set -e
 # Read our .env file.
 export $(grep -v '^#' .env | xargs)
 
+if [[ -z $SQL_PASSWORD ]]; then
+  echo "Error: Pleas set the SQL_PASSWORD variable in your .env file."
+  exit 1
+fi
+
+
 # Build the Docker images with the current user's ID.
 docker compose build --build-arg USER_ID=$(id -u ${USER})
 
