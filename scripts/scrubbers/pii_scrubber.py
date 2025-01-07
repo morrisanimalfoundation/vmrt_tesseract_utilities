@@ -5,10 +5,10 @@ import os
 from presidio_analyzer import AnalyzerEngine, RecognizerResult
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_anonymizer import AnonymizerEngine
-from sqlalchemy.orm import Session
 
 from vmrt_tesseract_utilities.database import (TranscriptionInput,
-                                               TranscriptionOutput, get_engine)
+                                               TranscriptionOutput,
+                                               get_database_session)
 from vmrt_tesseract_utilities.logging import stdout_logger
 
 """
@@ -174,36 +174,50 @@ def process_files(process_filepath_data: list, analyzer: AnalyzerEngine,
     threshold : float
         The confidence threshold for PII detection.
     """
-    for output_log in process_filepath_data:
-        with open(str(output_log.ocr_output_file), 'r') as f:
-            orig_text = f.read()
-        scrubbed_text, result_output = scrub_pii(orig_text, analyzer, threshold)
-        input_filename = os.path.basename(str(output_log.ocr_output_file))
-        filename_without_extension = os.path.splitext(input_filename)[0]
-        scrubbed_dir = f'{output_dir}/scrubbed_text/{args.document_type}/scrubbed_{args.document_type}'
-        os.makedirs(scrubbed_dir, exist_ok=True)  # Create directory if needed
-        output_file = f'{scrubbed_dir}/{filename_without_extension}.txt'
-        write_scrubbed_txt(output_file, scrubbed_text)
-        output_log.pii_scrubber_output_file = output_file
-        confidence_dir = f'{output_dir}/scrubbed_text/{args.document_type}/scrubbed_confidence'
-        os.makedirs(confidence_dir, exist_ok=True)
-        confidence_file = f'{confidence_dir}/confidence-{filename_without_extension}.json'
-        output_log.pii_scrubber_confidence_file = confidence_file
-        write_confidence_record(confidence_file, result_output, orig_text)
-        session = Session(get_engine(echo=args.debug_sql))
-        session.add(output_log)
-        session.commit()
+    sessionmaker = get_database_session(echo=args.debug_sql)
+    with sessionmaker.begin() as session:
+        for output_log in process_filepath_data:
+            with open(str(output_log.ocr_output_file), 'r') as f:
+                orig_text = f.read()
+            scrubbed_text, result_output = scrub_pii(orig_text, analyzer, threshold)
+            input_filename = os.path.basename(str(output_log.ocr_output_file))
+            filename_without_extension = os.path.splitext(input_filename)[0]
+            scrubbed_dir = f'{output_dir}/scrubbed_text/{args.document_type}/scrubbed_{args.document_type}'
+            os.makedirs(scrubbed_dir, exist_ok=True)  # Create directory if needed
+            output_file = f'{scrubbed_dir}/{filename_without_extension}.txt'
+            write_scrubbed_txt(output_file, scrubbed_text)
+            output_log.pii_scrubber_output_file = output_file
+            confidence_dir = f'{output_dir}/scrubbed_text/{args.document_type}/scrubbed_confidence'
+            os.makedirs(confidence_dir, exist_ok=True)
+            confidence_file = f'{confidence_dir}/confidence-{filename_without_extension}.json'
+            output_log.pii_scrubber_confidence_file = confidence_file
+            write_confidence_record(confidence_file, result_output, orig_text)
+            session.add(output_log)
 
 
 def get_files_to_process(args: argparse.Namespace) -> list:
-    session = Session(get_engine(echo=args.debug_sql))
-    query = (session.query(TranscriptionOutput)
-             .outerjoin(TranscriptionInput.assets)
-             .where(TranscriptionInput.document_type == args.document_type)
-             .where(TranscriptionOutput.ocr_output_file != None)
-             .where(TranscriptionOutput.pii_scrubber_output_file == None)
-             .limit(args.chunk_size)
-             .offset(args.offset))
+    """
+    Gets a list of input files to process.
+
+    Parameters
+    ----------
+    args: argparse.Namespace
+        The parsed args.
+
+    Returns
+    -------
+    results: list
+      The list of input files.
+    """
+    sessionmaker = get_database_session(echo=args.debug_sql)
+    with sessionmaker.begin() as session:
+        query = (session.query(TranscriptionOutput)
+                 .outerjoin(TranscriptionInput.assets)
+                 .where(TranscriptionInput.document_type == args.document_type)
+                 .where(TranscriptionOutput.ocr_output_file != None)
+                 .where(TranscriptionOutput.pii_scrubber_output_file == None)
+                 .limit(args.chunk_size)
+                 .offset(args.offset))
     return query.all()
 
 
@@ -219,10 +233,13 @@ def parse_args() -> argparse.Namespace:
     script_dir = os.path.dirname(os.path.abspath(__file__))
     parser = argparse.ArgumentParser(description='Scrub PII from text files.')
     parser.add_argument('output_to', help='Path to the output directory.')
-    parser.add_argument('--document-type', type=str, default='document')
-    parser.add_argument('--chunk-size', type=int, default=1000)
-    parser.add_argument('--offset', type=int, default=0)
-    parser.add_argument('--debug-sql', type=bool, default=False)
+    parser.add_argument('--document-type', type=str, default='document',
+                        help='The document type we want to produce, document, page or block.')
+    parser.add_argument('--chunk-size', type=int, default=1000,
+                        help='The number of records to process.')
+    parser.add_argument('--offset', type=int, default=0,
+                        help='The number of records to skip before beginning processing.')
+    parser.add_argument('--debug-sql', action='store_true', help='Enable SQL debugging')
     parser.add_argument('--config', required=False, type=str,
                         default=f'{script_dir}/config/stanford-deidentifier-base_nlp.yaml',
                         help='The config file for the NLP engine.')

@@ -1,11 +1,14 @@
 services:
   vmrt-emr-process-log-mysql:
+    env_file:
+      - path: ./.env
+        required: true
     container_name: vmrt-emr-process-log-mysql
     image: mysql:8.0
     command: --default-authentication-plugin=mysql_native_password
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: bmorris
+      MYSQL_ROOT_PASSWORD: $SQL_PASSWORD
   vmrt-emr-workspace:
     container_name: vmrt-emr-workspace
     build: .

@@ -1,15 +1,26 @@
 # Veterinary Medical Record Transcriber (VMRT) Tesseract Utilities
+
 The Golden Retriever lifetime study has thousands of electronic medical records (EMRs) that have valuable information. The VMRT project is an attempt to automate data extraction from these EMRs. This repository contains some very simple and crude Tesseract scripts to help evaluate our dataset. The unstructured text extracted from the EMRs may or may not be valuable, but understanding the quantity of low confidence records is very useful.
 
-Goals
-* Build dataset to understand composition of EMRs
-  * Kind of files
-  * Enrollment status
-* Determine confidence scores for ORC extraction from PDFs
-* Evaluate extracted text to determine Tesseract fit for project
+Goals:
+
+- Build dataset to understand composition of EMRs
+- Homogenize format of PDF and text files (more to come)
+- Determine confidence scores for optical character recognition from PDFs
+- Automatically scrub personally (or dog) identifiable information (PII)
+- Perform plain text substitution on corpus
+- Extract metadata, such as subject id, study year, related visit
 
 # Running the scripts
+
 The scripts are easily run via the Dockerfile included in this repo.
-1. Build the container like usual. `docker build -t <container name> .` Run the scripts `docker run --rm -v <path to data>/data -v <path to code>/workspace <image name> <script name>`
-2. To produce a file map that is compatible with the Tesseract utilitiy run the file_info.py script over the data directory. Output is printed to stdout.
-3. To process the file map produced above run the image_to_text.py with the file map. An output directory with an `unstructured_text` folder is also required. Output is dumped to output folder.
+
+1. Copy the example.env file to .env and fill in the values.  
+    a. The value for `SQL_CONNECTION_STRING` should be the connection string for the database container. (i.e. `mysql://user:password@vmrt-emr-process-log-mysql:3306/vmrt_emr_transcription`)
+2. The easiest way to spin up the docker images is to run the `run.sh` script within the repository root directory. You can also build the containers using the docker compose file. `docker build -t <container name> .`
+3. Set up your DB by running `python /workspace/scripts/database_setup.py install` within the container.
+4. Get ready for the transcription process by running `python scripts/create_transcription_process.py /data`
+5. Use the `transcribe_pdfs.py` script to transcribe the files needed.
+    - `python /workspace/scripts/transcribe_pdfs.py /workspace/output`
+6. Use the `pii_scrubber.py` script to remove PII from the text.
+    - `python /workspace/scripts/scrubbers/pii_scrubber.py`

@@ -4,8 +4,9 @@ from typing import List, Optional
 
 from dotenv import load_dotenv
 from sqlalchemy import (DateTime, Float, ForeignKey, Integer, String,
-                        create_engine, engine, func)
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+                        create_engine, func)
+from sqlalchemy.orm import (DeclarativeBase, Mapped, mapped_column,
+                            relationship, sessionmaker)
 
 load_dotenv()
 
@@ -69,17 +70,13 @@ class TranscriptionMetadata(Base):
     transcription_input: Mapped['TranscriptionInput'] = relationship(back_populates='derived_metadata')
     subject_id: Mapped[Optional[str]] = mapped_column(String(11))
     year_in_study: Mapped[Optional[int]] = mapped_column(Integer)
-    visit_date: Mapped[Optional[int]] = mapped_column(DateTime)
+    visit_date: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
 
     def __repr__(self) -> str:
         return f'Transcription Metadata (id={self.id})!r'
 
 
-# Just create a single connection, despite multiple calls to get_engine.
-_engine = None
-
-
-def get_engine(**kwargs) -> engine.Engine:
+def get_database_session(**kwargs) -> sessionmaker:
     """
     Gets the database connection.
 
@@ -88,10 +85,8 @@ def get_engine(**kwargs) -> engine.Engine:
     _engine : sqlalchemy.engine.Engine
       The database connection.
     """
-    global _engine
-    if _engine is None:
-        sql_url = os.getenv('SQL_CONNECTION_STRING')
-        if sql_url is None:
-            RuntimeError('SQL_CONNECTION_STRING environment variable is not set.')
-        _engine = create_engine(sql_url, **kwargs)
-    return _engine
+    sql_url = os.getenv('SQL_CONNECTION_STRING')
+    if sql_url is None:
+        RuntimeError('SQL_CONNECTION_STRING environment variable is not set.')
+    engine = create_engine(sql_url, **kwargs)
+    return sessionmaker(engine)

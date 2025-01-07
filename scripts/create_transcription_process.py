@@ -2,11 +2,9 @@ import argparse
 import os
 import re
 
-from sqlalchemy.orm import Session
-
 from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                TranscriptionMetadata,
-                                               get_engine)
+                                               get_database_session)
 from vmrt_tesseract_utilities.logging import stdout_logger
 
 """
@@ -14,7 +12,7 @@ Populates the transcription process log table with files to process and their re
 """
 
 # Pattern to match and extract the dog id.
-dog_id_re = r"(094-[0-9]{6})"
+DOG_ID_RE = r"(094-[0-9]{6})"
 
 
 def do_create_transcription_process(args: argparse.Namespace) -> None:
@@ -32,9 +30,10 @@ def do_create_transcription_process(args: argparse.Namespace) -> None:
     """
     stdout_logger.info(f'Creating new transcription process with strategy "{args.document_type}".')
     assets = []
-    with Session(get_engine(echo=args.debug_sql)) as session:
+    sessionmaker = get_database_session(echo=args.debug_sql)
+    with sessionmaker.begin() as session:
         for subdir, dirs, files in os.walk(args.path_to_describe):
-            dog_match = re.search(dog_id_re, subdir)
+            dog_match = re.search(DOG_ID_RE, subdir)
             if dog_match:
                 dog_id = dog_match.group(0)
             else:
@@ -49,8 +48,7 @@ def do_create_transcription_process(args: argparse.Namespace) -> None:
                 assets.append(input)
                 assets.append(metadata)
         session.add_all(assets)
-        session.commit()
-        stdout_logger.info('All done!')
+    stdout_logger.info('All done!')
 
 
 def parse_args() -> argparse.Namespace:
@@ -64,9 +62,10 @@ def parse_args() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(
         prog='Creates a new transcription process by scanning a directory of medical records.',)
-    parser.add_argument('path_to_describe')
-    parser.add_argument('--document_type', default='document')
-    parser.add_argument('--debug-sql', type=bool, default=False)
+    parser.add_argument('path_to_describe', help='The path to the EMRs we want to describe.')
+    parser.add_argument('--document-type', type=str, default='document',
+                        help='The document type we want to produce, document, page or block.')
+    parser.add_argument('--debug-sql', action='store_true', help='Enable SQL debugging')
     return parser.parse_args()
 
 

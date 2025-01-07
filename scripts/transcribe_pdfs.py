@@ -1,10 +1,10 @@
 import argparse
 import os
-
-from sqlalchemy.orm import Session
+from typing import LiteralString
 
 from vmrt_tesseract_utilities.database import (TranscriptionInput,
-                                               TranscriptionOutput, get_engine)
+                                               TranscriptionOutput,
+                                               get_database_session)
 from vmrt_tesseract_utilities.logging import stdout_logger
 from vmrt_tesseract_utilities.tesseract_operations import (
     TesseractOperationBlock, TesseractOperationDoc, TesseractOperationPage)
@@ -14,7 +14,7 @@ Runs Tesseract on items stored in the input database.
 """
 
 
-def _get_and_create_output_directory(args: argparse.Namespace) -> str:
+def _get_and_create_output_directory(args: argparse.Namespace) -> LiteralString | str | bytes:
     """
     Gets the output directory and attempts to create it if it doesn't exist.
 
@@ -28,9 +28,9 @@ def _get_and_create_output_directory(args: argparse.Namespace) -> str:
     base_path: str
       The path to the output directory.
     """
-    base_path = f'{args.output_to}/unstructured_text/{args.document_type}'
+    base_path = os.path.join(args.output_to, 'unstructured_text', args.document_type)
     if not os.path.exists(base_path):
-        os.makedirs(base_path)
+        os.makedirs(base_path, exist_ok=True)
     return base_path
 
 
@@ -72,31 +72,31 @@ def run_tesseract(args: argparse.Namespace) -> None:
         op = TesseractOperationPage()
     if args.document_type == 'block':
         op = TesseractOperationBlock()
-    session = Session(get_engine(echo=args.debug_sql))
-    query = (session.query(TranscriptionInput, TranscriptionOutput)
-             .outerjoin(TranscriptionInput.assets)
-             .where(TranscriptionInput.input_file.like('%.pdf'))
-             .where(TranscriptionInput.document_type == args.document_type)
-             .where(TranscriptionOutput.ocr_output_file == None)  # noqa: E711
-             .limit(args.chunk_size)
-             .offset(args.offset))
-    count = query.count()
-    stdout_logger.info(f'Found {count} files to transcribe.')
-    for db_input, db_output in query.all():
-        db_output_logs = []
-        output = op.process_row(db_input.input_file)
-        for ocr_result in output:
-            bits = os.path.splitext(os.path.basename(db_input.input_file))
-            output_path = f'{base_path}/{bits[0]}-{ocr_result["page"]}-{ocr_result["block"]}.txt'
-            _write_file(output_path, ocr_result['content'])
-            if db_output is None:
-                db_output = TranscriptionOutput()
-            db_output.ocr_output_file = output_path
-            db_output.ocr_confidence = ocr_result['confidence']
-            db_output.transcription_input = db_input
-            db_output_logs.append(db_output)
-            session.add_all(db_output_logs)
-            session.commit()
+    sessionmaker = get_database_session(echo=args.debug_sql)
+    with sessionmaker.begin() as session:
+        query = (session.query(TranscriptionInput, TranscriptionOutput)
+                 .outerjoin(TranscriptionInput.assets)
+                 .where(TranscriptionInput.input_file.like('%.pdf'))
+                 .where(TranscriptionInput.document_type == args.document_type)
+                 .where(TranscriptionOutput.ocr_output_file == None)  # noqa: E711
+                 .limit(args.chunk_size)
+                 .offset(args.offset))
+        count = query.count()
+        stdout_logger.info(f'Found {count} files to transcribe.')
+        for db_input, db_output in query.all():
+            db_output_logs = []
+            output = op.process_row(db_input.input_file)
+            for ocr_result in output:
+                bits = os.path.splitext(os.path.basename(db_input.input_file))
+                output_path = f'{base_path}/{bits[0]}-{ocr_result["page"]}-{ocr_result["block"]}.txt'
+                _write_file(output_path, ocr_result['content'])
+                if db_output is None:
+                    db_output = TranscriptionOutput()
+                db_output.ocr_output_file = output_path
+                db_output.ocr_confidence = ocr_result['confidence']
+                db_output.transcription_input = db_input
+                db_output_logs.append(db_output)
+                session.add_all(db_output_logs)
     stdout_logger.info('All done!')
 
 
@@ -112,10 +112,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog='Outputs the change in two Fisher inventory files.')
     parser.add_argument('output_to', help='Path to the output directory.')
-    parser.add_argument('--document-type', type=str, default='document')
-    parser.add_argument('--chunk-size', type=int, default=1000)
-    parser.add_argument('--offset', type=int, default=0)
-    parser.add_argument('--debug-sql', type=bool, default=False)
+    parser.add_argument('--document-type', type=str, default='document',
+                        help='The document type we want to produce, document, page or block.')
+    parser.add_argument('--chunk-size', type=int, default=1000,
+                        help='The number of records to process.')
+    parser.add_argument('--offset', type=int, default=0,
+                        help='The number of records to skip before beginning processing.')
+    parser.add_argument('--debug-sql', action='store_true', help='Enable SQL debugging')
     return parser.parse_args()
 
 
