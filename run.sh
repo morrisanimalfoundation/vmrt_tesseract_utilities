@@ -7,7 +7,7 @@ set -e
 export $(grep -v '^#' .env | xargs)
 
 if [[ -z $SQL_PASSWORD ]]; then
-  echo "Error: Pleas set the SQL_PASSWORD variable in your .env file."
+  echo "Error: Please set the SQL_PASSWORD variable in your .env file."
   exit 1
 fi
 
