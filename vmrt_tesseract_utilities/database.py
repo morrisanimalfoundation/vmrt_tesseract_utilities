@@ -71,6 +71,7 @@ class TranscriptionMetadata(Base):
     subject_id: Mapped[Optional[str]] = mapped_column(String(11))
     year_in_study: Mapped[Optional[int]] = mapped_column(Integer)
     visit_date: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    extracted_date: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
 
     def __repr__(self) -> str:
         return f'Transcription Metadata (id={self.id})!r'
