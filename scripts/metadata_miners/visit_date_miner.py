@@ -1,7 +1,7 @@
 import argparse
 import csv
 from datetime import datetime, timedelta
-from typing import List, Tuple
+from typing import List, Set, Tuple
 
 import sqlalchemy
 from sqlalchemy import and_, tuple_
@@ -19,7 +19,7 @@ Extracts visit date metadata from files and stashes them in the metadata databas
 
 def get_date_pairs_within_days(
     extracted_dates: List[datetime], visit_dates: List[datetime], days: int
-) -> List[Tuple[datetime, datetime]]:
+) -> Set[Tuple[datetime, datetime]]:
     """
     Finds pairs of dates (visit_date, extracted_date) where the extracted_date is within
     a specified number of days of the visit_date, without duplicate pairs. Optimized
@@ -36,8 +36,8 @@ def get_date_pairs_within_days(
 
     Returns
     -------
-    List[Tuple[datetime, datetime]]
-        A list of unique (visit_date, extracted_date) pairs.
+    Set[Tuple[datetime, datetime]]  # Update docstring to reflect Set return type
+        A set of unique (visit_date, extracted_date) pairs.
     """
 
     result_pairs = set()
@@ -47,7 +47,7 @@ def get_date_pairs_within_days(
                 result_pairs.add((visit_date, extracted_date))
                 break  # Move to the next visit_date once a match is found
 
-    return list(result_pairs)
+    return result_pairs
 
 
 def get_values_from_table(session, table_class, **kwargs) -> list:
