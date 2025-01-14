@@ -318,7 +318,7 @@ def parse_args() -> argparse.Namespace:
         help="Path to a TSV file containing the vet visit dates keyed by visit_date and grls_id.",
     )
     arg_parser.add_argument(
-        "--dog_profile_tsv", type=str, help="Path to a TSV file containing the dog profile data."
+        "--dog_profile_tsv", required=True, type=str, help="Path to a TSV file containing the dog profile data."
     )
     arg_parser.add_argument(
         "--search_unstructured_text_dir",

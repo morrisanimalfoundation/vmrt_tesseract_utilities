@@ -24,5 +24,5 @@ The scripts are easily run via the Dockerfile included in this repo.
     - `python /workspace/scripts/transcribe_pdfs.py /workspace/output`
 6. Use the `pii_scrubber.py` script to remove PII from the text.
     - `python /workspace/scripts/scrubbers/pii_scrubber.py /workspace/output`
-7. Use the `metadata_miner.py` script to remove PII from the text.
-    - `python /workspace/scripts/metadata_miner.py /workspace/output`
+7. Use the scripts in the `scripts/metadata_miners` directory to find data in the text.
+    - `python /workspace/scripts/metadata_miners/visit_date_miner.py /workspace/output --visit_date_tsv=/path/to/vet_visits.tsv --dog_profile_tsv=/path/to/dog_profile.tsv`
