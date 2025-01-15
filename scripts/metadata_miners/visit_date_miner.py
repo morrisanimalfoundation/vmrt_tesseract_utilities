@@ -1,10 +1,9 @@
 import argparse
 import csv
 from datetime import datetime, timedelta
-from typing import List, Set, Tuple
+from typing import List, Optional, Set, Tuple
 
 import sqlalchemy
-from sqlalchemy import and_, tuple_
 
 from vmrt_tesseract_utilities.database import (TranscriptionMetadata,
                                                TranscriptionOutput,
@@ -18,7 +17,7 @@ Extracts visit date metadata from files and stashes them in the metadata databas
 
 
 def get_date_pairs_within_days(
-    extracted_dates: List[datetime], visit_dates: List[datetime], days: int
+        extracted_dates: List[datetime], visit_dates: List[datetime], days: int
 ) -> Set[Tuple[datetime, datetime]]:
     """
     Finds pairs of dates (visit_date, extracted_date) where the extracted_date is within
@@ -36,7 +35,7 @@ def get_date_pairs_within_days(
 
     Returns
     -------
-    Set[Tuple[datetime, datetime]]  # Update docstring to reflect Set return type
+    Set[Tuple[datetime, datetime]]
         A set of unique (visit_date, extracted_date) pairs.
     """
 
@@ -50,68 +49,137 @@ def get_date_pairs_within_days(
     return result_pairs
 
 
-def get_values_from_table(session, table_class, **kwargs) -> list:
+def get_dog_dates(parsed_args: argparse.Namespace, subject_id: str) -> Tuple[
+    Optional[datetime.date], Optional[datetime.date]]:
     """
-    Retrieves values from a specified table based on optional filter conditions.
+    Retrieves the dog's birth and death dates from the TSV files.
 
-    This function allows you to query a database table and retrieve specific columns
-    or filter the results based on provided criteria. It uses SQLAlchemy's ORM for
-    database interaction.
+    Parameters
+    ----------
+    parsed_args : argparse.Namespace
+        The parsed arguments.
+    subject_id : str
+        The subject ID.
+
+    Returns
+    -------
+    tuple of Optional[datetime.date]
+        A tuple containing the dog's birthdate and death date.
+        Each date can be None if not found.
+    """
+    dogs_birth_dates = (
+        get_dates_from_tsv(parsed_args.dog_profile_tsv, subject_id, "birth_date")
+        if parsed_args.dog_profile_tsv
+        else None
+    )
+    dogs_birth_date = dogs_birth_dates[0] if dogs_birth_dates else None
+    dogs_death_dates = (
+        get_dates_from_tsv(parsed_args.dog_profile_tsv, subject_id, "death_date")
+        if parsed_args.dog_profile_tsv
+        else None
+    )
+    dogs_death_date = dogs_death_dates[0] if dogs_death_dates else None
+    return dogs_birth_date, dogs_death_date
+
+
+def extract_dates_from_files(files: list, dogs_birth_date: Optional[datetime.date],
+                             dogs_death_date: Optional[datetime.date]) -> List[datetime.date]:
+    """
+    Extracts dates from the given list of files.
+
+    Parameters
+    ----------
+    files : list
+        A list of filepaths to the files to extract from.
+    dogs_birth_date : Optional[datetime.date]
+        The dog's birthdate.
+    dogs_death_date : Optional[datetime.date]
+        The dog's death date.
+
+    Returns
+    -------
+    list of datetime.date
+        A list of extracted dates.
+    """
+    extracted_dates = []
+    for file in files:
+        extractor = DateExtractor(file, dogs_birth_date, dogs_death_date)
+        extracted_dates.extend(extractor.extract_dates_from_file())
+    return extracted_dates
+
+
+def update_existing_records(session: sqlalchemy.orm.session.Session, subject_id: str, input_id: int,
+                            date_pairs: List[Tuple[datetime.date, datetime.date]]) -> None:
+    """
+    Updates existing records with NULL visit_date and extracted_date.
 
     Parameters
     ----------
     session : sqlalchemy.orm.session.Session
         The SQLAlchemy session to use for the query.
-    table_class : sqlalchemy.ext.declarative.api.DeclarativeMeta
-        The SQLAlchemy model class representing the table.
-    **kwargs
-        Optional keyword arguments:
-            target_columns (list): A list of column names to retrieve.
-                                    If not provided, all columns are retrieved.
-            unique (bool): If True, only unique rows will be returned. Defaults to False.
-            Other keyword arguments specifying filter conditions in the form
-            `column_name=column_value`.
+    subject_id : str
+        The subject ID.
+    input_id : int
+        The record's input_id.
+    date_pairs : list of tuple of (datetime.date, datetime.date)
+        A list of date pairs (visit_date, extracted_date).
+    """
+    # ... (rest of the function code)
+
+    for visit_date, extracted_date in date_pairs:
+        session.query(TranscriptionMetadata).filter(
+            TranscriptionMetadata.subject_id == subject_id,
+            TranscriptionMetadata.input_id == input_id,
+            TranscriptionMetadata.visit_date.is_(None),
+            TranscriptionMetadata.extracted_date.is_(None),
+        ).update({"visit_date": visit_date, "extracted_date": extracted_date})
+
+
+def get_existing_date_pairs(session: sqlalchemy.orm.session.Session, subject_id: str, input_id: int,
+                            date_pairs: set[tuple[datetime, datetime]]) -> Set[
+    Tuple[datetime.date, datetime.date]]:
+    """
+    Retrieves existing date pairs from the database.
+
+    Parameters
+    ----------
+    session : sqlalchemy.orm.session.Session
+        The SQLAlchemy session to use for the query.
+    subject_id : str
+        The subject ID.
+    input_id : int
+        The record's input_id.
+    date_pairs : set[tuple[datetime, datetime]]
+        A set of date pairs (visit_date, extracted_date).
 
     Returns
     -------
-    list
-        A list of table objects or tuples (if target_columns is specified) matching the criteria.
-
+    set of tuple of (datetime.date, datetime.date)
+        A set of existing date pairs.
     """
-
-    try:
-        target_columns = kwargs.pop("target_columns", None)
-        unique = kwargs.pop("unique", False)  # Extract unique flag
-        query = session.query(table_class)
-
-        if kwargs:
-            filter_conditions = [
-                getattr(table_class, col) == val for col, val in kwargs.items()
-            ]
-            query = query.filter(and_(*filter_conditions))
-
-        if target_columns:
-            columns_to_fetch = [getattr(table_class, col) for col in target_columns]
-            query = query.with_entities(*columns_to_fetch)
-
-        if unique:
-            query = query.distinct()
-
-        results = query.all()
-        return results
-    except Exception as e:
-        stdout_logger.error(
-            f"Error retrieving records from {table_class.__tablename__}: {e}"
+    existing_records = (
+        session.query(TranscriptionMetadata)
+        .filter(
+            sqlalchemy.and_(
+                TranscriptionMetadata.subject_id == subject_id,
+                TranscriptionMetadata.input_id == input_id,
+                sqlalchemy.tuple_(
+                    TranscriptionMetadata.visit_date,
+                    TranscriptionMetadata.extracted_date,
+                ).in_(date_pairs),
+            )
         )
-        return []
+        .all()
+    )
+    return {(record.visit_date, record.extracted_date) for record in existing_records}
 
 
 def set_visit_dates_from_files(
-    files: list,
-    session: sqlalchemy.orm.session.Session,
-    subject_id: str,
-    input_id: int,
-    parsed_args: argparse.Namespace,
+        files: list,
+        session: sqlalchemy.orm.session.Session,
+        subject_id: str,
+        input_id: int,
+        parsed_args: argparse.Namespace,
 ):
     """
     Gets a list of dates from the specified files and adds them to the database
@@ -134,49 +202,19 @@ def set_visit_dates_from_files(
     dogs_visit_dates = get_dates_from_tsv(
         parsed_args.visit_date_tsv, subject_id, "visit_date"
     )
-    dogs_birth_dates = (
-        get_dates_from_tsv(parsed_args.dog_profile_tsv, subject_id, "birth_date")
-        if parsed_args.dog_profile_tsv
-        else None
-    )
-    dogs_birth_date = dogs_birth_dates[0] if dogs_birth_dates else None
-    dogs_death_dates = (
-        get_dates_from_tsv(parsed_args.dog_profile_tsv, subject_id, "death_date")
-        if parsed_args.dog_profile_tsv
-        else None
-    )
-    dogs_death_date = dogs_death_dates[0] if dogs_death_dates else None
+    dogs_birth_date, dogs_death_date = get_dog_dates(parsed_args, subject_id)
 
-    extracted_dates = []
-    for file in files:
-        extractor = DateExtractor(file, dogs_birth_date, dogs_death_date)
-        extracted_dates.extend(extractor.extract_dates_from_file())
+    extracted_dates = extract_dates_from_files(files, dogs_birth_date, dogs_death_date)
 
     if extracted_dates:
         date_pairs = get_date_pairs_within_days(
             extracted_dates, dogs_visit_dates, parsed_args.visit_date_threshold
         )
 
-        # Check for existing records in bulk (example using a WHERE IN clause)
-        existing_records = (
-            session.query(TranscriptionMetadata)
-            .filter(
-                and_(
-                    TranscriptionMetadata.subject_id == subject_id,
-                    TranscriptionMetadata.input_id == input_id,
-                    tuple_(
-                        TranscriptionMetadata.visit_date,
-                        TranscriptionMetadata.extracted_date,
-                    ).in_(date_pairs),
-                )
-            )
-            .all()
-        )
+        update_existing_records(session, subject_id, input_id, date_pairs)
 
-        # Create new records only for date pairs that don't exist
-        existing_date_pairs = {
-            (record.visit_date, record.extracted_date) for record in existing_records
-        }
+        existing_date_pairs = get_existing_date_pairs(session, subject_id, input_id, date_pairs)
+
         new_metadata = [
             TranscriptionMetadata(
                 subject_id=subject_id,
@@ -187,11 +225,10 @@ def set_visit_dates_from_files(
             for visit_date, extracted_date in date_pairs
             if (visit_date, extracted_date) not in existing_date_pairs
         ]
+        session.add_all(new_metadata)
 
-        session.add_all(new_metadata)  # Batch insert
 
-
-def save_visit_dates(parsed_args: argparse.Namespace) -> List[datetime]:
+def save_visit_dates(parsed_args: argparse.Namespace):
     """
     Gets a list of dates from the output files. Optimized to reduce database interactions.
 
@@ -199,11 +236,6 @@ def save_visit_dates(parsed_args: argparse.Namespace) -> List[datetime]:
     ----------
     parsed_args : argparse.Namespace
         The parsed args.
-
-    Returns
-    -------
-    List[date]
-        The list of visit dates extracted from the files.
     """
 
     session_maker = get_database_session(echo=parsed_args.debug_sql)
@@ -215,9 +247,15 @@ def save_visit_dates(parsed_args: argparse.Namespace) -> List[datetime]:
                 TranscriptionMetadata,
                 TranscriptionOutput.input_id == TranscriptionMetadata.input_id,
             )
+            # Filter for records where visit_date is NULL
+            .filter(TranscriptionMetadata.visit_date.is_(None))
+            # Apply offset and limit for chunking
+            .offset(parsed_args.offset)
+            .limit(parsed_args.chunk_size)
             .all()
         )
 
+        stdout_logger.info(f'Searching {len(results)} files for visit dates.')
         for row, subject_id in results:
             files_to_check = [row.pii_scrubber_confidence_file]
             if parsed_args.search_unstructured_text_dir:
@@ -225,8 +263,7 @@ def save_visit_dates(parsed_args: argparse.Namespace) -> List[datetime]:
             set_visit_dates_from_files(
                 files_to_check, session, subject_id, row.input_id, parsed_args
             )
-
-    return []  # The function doesn't actually use extracted_dates
+        stdout_logger.info(f'Finished searching {len(results)} files for visit dates.')
 
 
 def get_values_from_tsv(tsv_file, id_value, target_column):
@@ -323,16 +360,18 @@ def parse_args() -> argparse.Namespace:
     arg_parser.add_argument(
         "--search_unstructured_text_dir",
         action="store_true",
-        required=False,
         help="Search unstructured text files",
     )
-    arg_parser.add_argument("--debug-sql", action="store_true", help="Enable SQL debugging")
+    arg_parser.add_argument("--debug_sql", action="store_true", help="Enable SQL debugging")
     arg_parser.add_argument(
         "--visit_date_threshold",
         type=int,
         default=3,
         help="The number of days to consider as the threshold relative to the visit dates.",
     )
+    arg_parser.add_argument('--chunk_size', type=int, help='The number of records to process.')
+    arg_parser.add_argument('--offset', type=int, default=0,
+                            help='The number of records to skip before beginning processing.')
     return arg_parser.parse_args()
 
 

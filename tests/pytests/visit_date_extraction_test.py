@@ -6,8 +6,8 @@ import pytest
 from sqlalchemy.orm import Session
 
 from scripts.metadata_miners.visit_date_miner import (
-    get_date_pairs_within_days, get_dates_from_tsv, get_values_from_table,
-    get_values_from_tsv, save_visit_dates, set_visit_dates_from_files)
+    get_date_pairs_within_days, get_dates_from_tsv, get_values_from_tsv,
+    save_visit_dates, set_visit_dates_from_files)
 
 
 @pytest.fixture
@@ -123,7 +123,7 @@ def test_save_visit_dates(mocker):
         Mocker fixture.
     """
     mock_parsed_args = argparse.Namespace(
-        debug_sql=False, search_unstructured_text_dir=False
+        debug_sql=False, search_unstructured_text_dir=False, chunk_size=22, offset=0
     )
     mock_session = mocker.MagicMock(spec=Session)
     mock_get_database_session = mocker.patch(
