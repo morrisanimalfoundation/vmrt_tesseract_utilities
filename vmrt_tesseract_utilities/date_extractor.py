@@ -87,14 +87,14 @@ class DateExtractor:
         """
 
         dates_found = []
-        if self.filepath.endswith(".json"):
+        if self.filepath.endswith('.json'):
             with open(self.filepath, 'r') as f:
                 try:
                     data = json.load(f)
                     dates_found = find_dates(data, self.min_date, self.max_date)
                 except json.JSONDecodeError as e:
-                    stdout_logger.error(f"Error decoding JSON in file {self.filepath}: {e}")
-        elif self.filepath.endswith(".txt"):
+                    stdout_logger.error(f'Error decoding JSON in file {self.filepath}: {e}')
+        elif self.filepath.endswith('.txt'):
             with open(self.filepath, 'r') as f:
                 for line in f:  # Process line by line
                     dates_found.extend(find_dates(line, self.min_date, self.max_date))

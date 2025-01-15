@@ -25,7 +25,7 @@ def mock_session(mocker):
 
 
 @pytest.mark.parametrize(
-    "extracted_dates, visit_dates, days, expected_pairs",
+    'extracted_dates, visit_dates, days, expected_pairs',
     [
         (
             [datetime(2024, 1, 15), datetime(2024, 1, 20)],
@@ -88,13 +88,13 @@ def test_set_visit_dates_from_files(mock_session, mocker):
         Mocker fixture.
     """
     mock_parsed_args = argparse.Namespace(
-        visit_date_tsv="test_visit_dates.tsv",
-        dog_profile_tsv="test_dog_profile.tsv",
+        visit_date_tsv='test_visit_dates.tsv',
+        dog_profile_tsv='test_dog_profile.tsv',
         visit_date_threshold=3,
     )
 
     mocker.patch(
-        "scripts.metadata_miners.visit_date_miner.get_dates_from_tsv",
+        'scripts.metadata_miners.visit_date_miner.get_dates_from_tsv',
         side_effect=[
             [datetime(2024, 1, 10), datetime(2024, 1, 19)],  # visit dates
             [datetime(2024, 1, 1)],  # birthdate
@@ -102,12 +102,12 @@ def test_set_visit_dates_from_files(mock_session, mocker):
         ],
     )
     mocker.patch(
-        "scripts.metadata_miners.visit_date_miner.DateExtractor.extract_dates_from_file",
+        'scripts.metadata_miners.visit_date_miner.DateExtractor.extract_dates_from_file',
         return_value=[datetime(2024, 1, 15), datetime(2024, 1, 20)],
     )
 
     set_visit_dates_from_files(
-        ["test_file.txt"], mock_session, "test_subject", 1, mock_parsed_args
+        ['test_file.txt'], mock_session, 'test_subject', 1, mock_parsed_args
     )
 
     mock_session.add_all.assert_called_once()
@@ -127,14 +127,14 @@ def test_save_visit_dates(mocker):
     )
     mock_session = mocker.MagicMock(spec=Session)
     mock_get_database_session = mocker.patch(
-        "scripts.metadata_miners.visit_date_miner.get_database_session",
+        'scripts.metadata_miners.visit_date_miner.get_database_session',
         return_value=mocker.MagicMock(begin=mocker.MagicMock(return_value=mock_session)),
     )
     mock_session.query().outerjoin().all.return_value = [
-        ("test_file.txt", "test_subject_id")
+        ('test_file.txt', 'test_subject_id')
     ]
     mocker.patch(
-        "scripts.metadata_miners.visit_date_miner.set_visit_dates_from_files"
+        'scripts.metadata_miners.visit_date_miner.set_visit_dates_from_files'
     )
 
     save_visit_dates(mock_parsed_args)
@@ -143,36 +143,36 @@ def test_save_visit_dates(mocker):
 
 
 @pytest.mark.parametrize(
-    "tsv_content, id_value, target_column, expected_values",
+    'tsv_content, id_value, target_column, expected_values',
     [
         (
             [
-                {"grls_id": "123", "visit_date": "2024-01-10", "other": "value1"},
-                {"grls_id": "456", "visit_date": "2023-05-08", "other": "value2"},
+                {'grls_id': '123', 'visit_date': '2024-01-10', 'other': 'value1'},
+                {'grls_id': '456', 'visit_date': '2023-05-08', 'other': 'value2'},
             ],
-            "123",
-            "visit_date",
-            ["2024-01-10"],
+            '123',
+            'visit_date',
+            ['2024-01-10'],
         ),
         (
             [
-                {"subject_id": "789", "birth_date": "2022-10-02", "other": "value3"},
-                {"subject_id": "101", "birth_date": "2024-09-29", "other": "value4"},
+                {'subject_id': '789', 'birth_date': '2022-10-02', 'other': 'value3'},
+                {'subject_id': '101', 'birth_date': '2024-09-29', 'other': 'value4'},
             ],
-            "789",
-            "birth_date",
-            ["2022-10-02"],
+            '789',
+            'birth_date',
+            ['2022-10-02'],
         ),
         (
             [
-                {"grls_id": "123", "visit_date": "2024-01-10", "other": "value1"},
-                {"subject_id": "123", "visit_date": "2023-05-08", "other": "value2"},
+                {'grls_id': '123', 'visit_date': '2024-01-10', 'other': 'value1'},
+                {'subject_id': '123', 'visit_date': '2023-05-08', 'other': 'value2'},
             ],
-            "123",
-            "visit_date",
-            ["2024-01-10", "2023-05-08"],
+            '123',
+            'visit_date',
+            ['2024-01-10', '2023-05-08'],
         ),
-        ([], "123", "visit_date", []),
+        ([], '123', 'visit_date', []),
     ],
 )
 def test_get_values_from_tsv(tsv_content, id_value, target_column, expected_values, tmp_path):
@@ -192,11 +192,11 @@ def test_get_values_from_tsv(tsv_content, id_value, target_column, expected_valu
     tmp_path : pathlib.Path
         Temporary path.
     """
-    tsv_file = tmp_path / "test.tsv"
-    with open(tsv_file, "w", newline="") as f:
+    tsv_file = tmp_path / 'test.tsv'
+    with open(tsv_file, 'w', newline='') as f:
         # Explicitly define fieldnames here
         fieldnames = ['grls_id', 'visit_date', 'birth_date', 'other', 'subject_id']
-        writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
+        writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter='\t')
         writer.writeheader()
         writer.writerows(tsv_content)
 
@@ -205,31 +205,31 @@ def test_get_values_from_tsv(tsv_content, id_value, target_column, expected_valu
 
 
 @pytest.mark.parametrize(
-    "tsv_content, grls_id, target_column, expected_dates",
+    'tsv_content, grls_id, target_column, expected_dates',
     [
         (
             [
-                {"grls_id": "123", "visit_date": "2024-01-10", "other": "value1"},
-                {"grls_id": "456", "visit_date": "2023-05-08", "other": "value2"},
+                {'grls_id': '123', 'visit_date': '2024-01-10', 'other': 'value1'},
+                {'grls_id': '456', 'visit_date': '2023-05-08', 'other': 'value2'},
             ],
-            "123",
-            "visit_date",
+            '123',
+            'visit_date',
             [datetime(2024, 1, 10)],
         ),
         (
             [
                 {
-                    "grls_id": "789",
-                    "birth_date": "2022-10-02; 2022-10-03",
-                    "other": "value3",
+                    'grls_id': '789',
+                    'birth_date': '2022-10-02; 2022-10-03',
+                    'other': 'value3',
                 },
-                {"grls_id": "101", "birth_date": "2024-09-29", "other": "value4"},
+                {'grls_id': '101', 'birth_date': '2024-09-29', 'other': 'value4'},
             ],
-            "789",
-            "birth_date",
+            '789',
+            'birth_date',
             [datetime(2022, 10, 2), datetime(2022, 10, 3)],
         ),
-        ([], "123", "visit_date", []),
+        ([], '123', 'visit_date', []),
     ],
 )
 def test_get_dates_from_tsv(
@@ -253,19 +253,19 @@ def test_get_dates_from_tsv(
     mocker : pytest_mock.plugin.MockerFixture
         Mocker fixture.
     """
-    tsv_file = tmp_path / "test.tsv"
-    with open(tsv_file, "w", newline="") as f:
+    tsv_file = tmp_path / 'test.tsv'
+    with open(tsv_file, 'w', newline='') as f:
         if tsv_content:
-            writer = csv.DictWriter(f, tsv_content[0].keys(), delimiter="\t")
+            writer = csv.DictWriter(f, tsv_content[0].keys(), delimiter='\t')
             writer.writeheader()
             writer.writerows(tsv_content)
         else:
             pass
 
     mocker.patch(
-        "scripts.metadata_miners.visit_date_miner.find_dates",
+        'scripts.metadata_miners.visit_date_miner.find_dates',
         side_effect=lambda date_str: [
-            datetime.strptime(d.strip(), "%Y-%m-%d") for d in date_str.split(";")
+            datetime.strptime(d.strip(), '%Y-%m-%d') for d in date_str.split(';')
         ],
     )
 

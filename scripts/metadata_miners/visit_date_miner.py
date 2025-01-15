@@ -68,13 +68,13 @@ def get_dog_dates(parsed_args: argparse.Namespace, subject_id: str) -> Tuple[
         Each date can be None if not found.
     """
     dogs_birth_dates = (
-        get_dates_from_tsv(parsed_args.dog_profile_tsv, subject_id, "birth_date")
+        get_dates_from_tsv(parsed_args.dog_profile_tsv, subject_id, 'birth_date')
         if parsed_args.dog_profile_tsv
         else None
     )
     dogs_birth_date = dogs_birth_dates[0] if dogs_birth_dates else None
     dogs_death_dates = (
-        get_dates_from_tsv(parsed_args.dog_profile_tsv, subject_id, "death_date")
+        get_dates_from_tsv(parsed_args.dog_profile_tsv, subject_id, 'death_date')
         if parsed_args.dog_profile_tsv
         else None
     )
@@ -132,7 +132,7 @@ def update_existing_records(session: sqlalchemy.orm.session.Session, subject_id:
             TranscriptionMetadata.input_id == input_id,
             TranscriptionMetadata.visit_date.is_(None),
             TranscriptionMetadata.extracted_date.is_(None),
-        ).update({"visit_date": visit_date, "extracted_date": extracted_date})
+        ).update({'visit_date': visit_date, 'extracted_date': extracted_date})
 
 
 def get_existing_date_pairs(session: sqlalchemy.orm.session.Session, subject_id: str, input_id: int,
@@ -200,7 +200,7 @@ def set_visit_dates_from_files(
     """
 
     dogs_visit_dates = get_dates_from_tsv(
-        parsed_args.visit_date_tsv, subject_id, "visit_date"
+        parsed_args.visit_date_tsv, subject_id, 'visit_date'
     )
     dogs_birth_date, dogs_death_date = get_dog_dates(parsed_args, subject_id)
 
@@ -289,15 +289,15 @@ def get_values_from_tsv(tsv_file, id_value, target_column):
 
     values = []
     try:
-        with open(tsv_file, "r", newline="") as file:
-            reader = csv.DictReader(file, delimiter="\t")
+        with open(tsv_file, 'r', newline='') as file:
+            reader = csv.DictReader(file, delimiter='\t')
             for row in reader:
-                if "grls_id" in row and row["grls_id"] == id_value:
+                if 'grls_id' in row and row['grls_id'] == id_value:
                     values.append(row[target_column])
-                elif "subject_id" in row and str(row["subject_id"]) == id_value:
+                elif 'subject_id' in row and str(row['subject_id']) == id_value:
                     values.append(row[target_column])
     except Exception as e:
-        stdout_logger.error(f"Error getting values from TSV: {e}")
+        stdout_logger.error(f'Error getting values from TSV: {e}')
 
     return values
 
@@ -328,7 +328,7 @@ def get_dates_from_tsv(tsv_file: str, grls_id: str, target_column: str) -> List[
         for date_str in date_strings:
             extracted_data.extend(find_dates(date_str))
     except Exception as e:
-        stdout_logger.error(f"Error extracting dates for GRLS ID {grls_id}: {e}")
+        stdout_logger.error(f'Error extracting dates for GRLS ID {grls_id}: {e}')
 
     return extracted_data
 
@@ -343,31 +343,31 @@ def parse_args() -> argparse.Namespace:
         The parsed args.
     """
     arg_parser = argparse.ArgumentParser(
-        description="Search files for metadata values."
+        description='Search files for metadata values.'
     )
     arg_parser.add_argument(
-        "output_dir", type=str, help="Path to directory containing the output files."
+        'output_dir', type=str, help='Path to directory containing the output files.'
     )
     arg_parser.add_argument(
-        "--visit_date_tsv",
+        '--visit_date_tsv',
         required=True,
         type=str,
-        help="Path to a TSV file containing the vet visit dates keyed by visit_date and grls_id.",
+        help='Path to a TSV file containing the vet visit dates keyed by visit_date and grls_id.',
     )
     arg_parser.add_argument(
-        "--dog_profile_tsv", required=True, type=str, help="Path to a TSV file containing the dog profile data."
+        '--dog_profile_tsv', required=True, type=str, help='Path to a TSV file containing the dog profile data.'
     )
     arg_parser.add_argument(
-        "--search_unstructured_text_dir",
-        action="store_true",
-        help="Search unstructured text files",
+        '--search_unstructured_text_dir',
+        action='store_true',
+        help='Search unstructured text files',
     )
-    arg_parser.add_argument("--debug_sql", action="store_true", help="Enable SQL debugging")
+    arg_parser.add_argument('--debug_sql', action='store_true', help='Enable SQL debugging')
     arg_parser.add_argument(
-        "--visit_date_threshold",
+        '--visit_date_threshold',
         type=int,
         default=3,
-        help="The number of days to consider as the threshold relative to the visit dates.",
+        help='The number of days to consider as the threshold relative to the visit dates.',
     )
     arg_parser.add_argument('--chunk_size', type=int, help='The number of records to process.')
     arg_parser.add_argument('--offset', type=int, default=0,
@@ -375,6 +375,6 @@ def parse_args() -> argparse.Namespace:
     return arg_parser.parse_args()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     args = parse_args()
     save_visit_dates(args)
