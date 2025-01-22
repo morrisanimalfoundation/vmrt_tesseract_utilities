@@ -6,10 +6,9 @@ from presidio_analyzer import AnalyzerEngine, RecognizerResult
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_anonymizer import AnonymizerEngine
 
-from vmrt_tesseract_utilities.database import (TranscriptionInput,
-                                               TranscriptionOutput,
-                                               get_database_session)
+from vmrt_tesseract_utilities.database import (get_database_session)
 from vmrt_tesseract_utilities.logging import stdout_logger
+from vmrt_tesseract_utilities.scrubbing_utils import write_scrubbed_txt, get_files_to_process
 
 """
 Leverages presidio to attempt automatic PII stripping.
@@ -83,26 +82,6 @@ def scrub_pii(text: str, analyzer: AnalyzerEngine, threshold: float) -> tuple[st
         raise
 
 
-def write_scrubbed_txt(output_filename: str, anonymized_text: str) -> None:
-    """
-    Writes the anonymized text to an output file.
-
-    Parameters
-    ----------
-    output_filename : str
-        The path to the file.
-    anonymized_text : str
-        The anonymized text.
-    """
-    try:
-        if anonymized_text:
-            with open(output_filename, 'w') as f:
-                f.write(anonymized_text)
-    except Exception as e:
-        stdout_logger.error(f'Error writing scrubbed output: {e}')
-        raise
-
-
 def write_confidence_record(filename: str, filtered_results: list, original_text: str) -> None:
     """
     Writes the filtered results to a JSON file.
@@ -131,31 +110,6 @@ def write_confidence_record(filename: str, filtered_results: list, original_text
     except Exception as e:
         stdout_logger.error(f'Error writing confidence record: {e}')
         raise
-
-
-def get_output_strategy_from_path(file_path: str) -> str:
-    """
-    Determines the type of path based on path segments.
-
-    Parameters
-    ----------
-    file_path : str
-        The file_path to check.
-
-    Returns
-    -------
-    str
-        The extracted path type.
-    """
-    parts = file_path.split(os.sep)
-    if 'doc' in parts:
-        return 'doc'
-    elif 'page' in parts:
-        return 'page'
-    elif "unstructured_text" in parts:
-        return parts[parts.index("unstructured_text") + 1]
-    else:
-        return 'page'  # Default to page
 
 
 def process_files(process_filepath_data: list, analyzer: AnalyzerEngine,
@@ -193,32 +147,6 @@ def process_files(process_filepath_data: list, analyzer: AnalyzerEngine,
             output_log.pii_scrubber_confidence_file = confidence_file
             write_confidence_record(confidence_file, result_output, orig_text)
             session.add(output_log)
-
-
-def get_files_to_process(args: argparse.Namespace) -> list:
-    """
-    Gets a list of input files to process.
-
-    Parameters
-    ----------
-    args: argparse.Namespace
-        The parsed args.
-
-    Returns
-    -------
-    results: list
-      The list of input files.
-    """
-    sessionmaker = get_database_session(echo=args.debug_sql)
-    with sessionmaker.begin() as session:
-        query = (session.query(TranscriptionOutput)
-                 .outerjoin(TranscriptionInput.assets)
-                 .where(TranscriptionInput.document_type == args.document_type)
-                 .where(TranscriptionOutput.ocr_output_file != None)
-                 .where(TranscriptionOutput.pii_scrubber_output_file == None)
-                 .limit(args.chunk_size)
-                 .offset(args.offset))
-    return query.all()
 
 
 def parse_args() -> argparse.Namespace:
