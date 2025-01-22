@@ -16,11 +16,13 @@ Goals:
 The scripts are easily run via the Dockerfile included in this repo.
 
 1. Copy the example.env file to .env and fill in the values.  
-    a. The value for `SQL_CONNECTION_STRING` should be the connection string for the database container. (i.e. `mysql://user:password@vmrt-emr-process-log-mysql:3306/vmrt_emr_transcription`)
-2. The easiest way to spin up the docker images is to run the `run.sh` script within the repository root directory. You can also build the containers using the docker compose file. `docker build -t <container name> .`
-3. Set up your DB by running `python /workspace/scripts/database_setup.py install` within the container.
-4. Get ready for the transcription process by running `python scripts/create_transcription_process.py /data`
-5. Use the `transcribe_pdfs.py` script to transcribe the files needed.
+    a. The value for `SQL_CONNECTION_STRING` should be the connection string for the database container. (i.e. `mysql://user:password@vmrt-emr-process-log-mysql:3306/vmrt_emr_transcription`)
+2. The easiest way to spin up the docker images is to run the `run.sh` script within the repository root directory.
+3. Set up your DB by running `python /workspace/scripts/database_setup.py install` within the container.
+4. Get ready for the transcription process by running `python scripts/create_transcription_process.py /data`
+5. Use the `transcribe_pdfs.py` script to transcribe the files needed.
     - `python /workspace/scripts/transcribe_pdfs.py /workspace/output`
-6. Use the `pii_scrubber.py` script to remove PII from the text.
-    - `python /workspace/scripts/scrubbers/pii_scrubber.py`
+6. Use the `pii_scrubber.py` script to remove PII from the text.
+    - `python /workspace/scripts/scrubbers/pii_scrubber.py /workspace/output`
+7. Use the scripts in the `scripts/metadata_miners` directory to find data in the text.
+    - `python /workspace/scripts/metadata_miners/visit_date_miner.py /workspace/output --visit_date_tsv=/path/to/vet_visits.tsv --dog_profile_tsv=/path/to/dog_profile.tsv`

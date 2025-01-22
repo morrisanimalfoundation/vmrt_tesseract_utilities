@@ -65,7 +65,7 @@ def parse_args() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(
         prog='Performs database utility related functions.',)
-    parser.add_argument('operation', help='The database operation to perform, install or drop.')
+    parser.add_argument('operation', help='The database operation to perform, install or drop.', choices=['install', 'drop'])
     parser.add_argument('--debug-sql', action='store_true', help='Enable SQL debugging')
     return parser.parse_args()
 
