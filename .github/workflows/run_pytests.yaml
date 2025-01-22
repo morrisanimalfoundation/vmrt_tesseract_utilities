@@ -1,0 +1,33 @@
+# This workflow will install Python dependencies and run pytests
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
+
+name: Run Pytests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up Python
+      uses: actions/setup-python@v3
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -U pip setuptools wheel
+        if [ -f requirements/pytest_requirements.txt ]; then pip install -r requirements/pytest_requirements.txt; fi
+
+    - name: Run tests
+      run: |
+        pytest | tee output.txt
+        cat output.txt >> $GITHUB_STEP_SUMMARY
