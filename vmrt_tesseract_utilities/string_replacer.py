@@ -1,3 +1,5 @@
+from typing import List
+
 """
 Provides string replacement functionality.
 """
@@ -5,8 +7,7 @@ Provides string replacement functionality.
 
 class StringReplacer:
     """
-    Replaces target strings within a text blob with a specified replacement
-    string.
+    Replaces target strings within a text blob with a specified replacement string.
 
     Parameters
     ----------
@@ -23,13 +24,13 @@ class StringReplacer:
     >>> print(new_blob)
     This is a text blob with <new_string> and <new_string>.
     """
-    def __init__(self, target_strings: list, replacement_string: str):
+    def __init__(self, target_strings: List[str], replacement_string: str):
         """
         Initializes the StringReplacer.
 
         Parameters
         ----------
-        target_strings : list
+        target_strings : list of str
             The strings to be replaced.
         replacement_string : str
             The string to replace the target strings with.
@@ -37,8 +38,7 @@ class StringReplacer:
         self.target_strings = target_strings
         self.replacement_string = replacement_string
 
-
-    def replace(self, text_blob):
+    def replace(self, text_blob: str) -> str:
         """
         Replaces the target strings within the text blob.
 

@@ -6,9 +6,11 @@ from presidio_analyzer import AnalyzerEngine, RecognizerResult
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_anonymizer import AnonymizerEngine
 
-from vmrt_tesseract_utilities.database import (get_database_session)
+from vmrt_tesseract_utilities.database import (TranscriptionInput,
+                                               TranscriptionOutput,
+                                               get_database_session)
 from vmrt_tesseract_utilities.logging import stdout_logger
-from vmrt_tesseract_utilities.scrubbing_utils import write_scrubbed_txt, get_files_to_process
+from vmrt_tesseract_utilities.scrubbing_utils import write_scrubbed_txt
 
 """
 Leverages presidio to attempt automatic PII stripping.
@@ -129,24 +131,64 @@ def process_files(process_filepath_data: list, analyzer: AnalyzerEngine,
         The confidence threshold for PII detection.
     """
     sessionmaker = get_database_session(echo=args.debug_sql)
-    with sessionmaker.begin() as session:
+    with sessionmaker() as session:
         for output_log in process_filepath_data:
-            with open(str(output_log.ocr_output_file), 'r') as f:
+            session.add(output_log)  # Ensure the instance is bound to the session
+            # Use the replacement file if it exists, otherwise use the OCR output.
+            if hasattr(output_log, 'list_replacement_output_file') and output_log.list_replacement_output_file:
+                input_filepath = output_log.list_replacement_output_file
+            else:
+                input_filepath = output_log.ocr_output_file
+            # Read the original text from the input file.
+            with open(str(input_filepath), 'r') as f:
                 orig_text = f.read()
+            stdout_logger.info(f"Scrubbing {input_filepath}")
+            # Scrub the PII from the text.
             scrubbed_text, result_output = scrub_pii(orig_text, analyzer, threshold)
-            input_filename = os.path.basename(str(output_log.ocr_output_file))
+            # Write the scrubbed text to a file.
+            input_filename = os.path.basename(str(input_filepath))
             filename_without_extension = os.path.splitext(input_filename)[0]
             scrubbed_dir = f'{output_dir}/scrubbed_text/{args.document_type}/scrubbed_{args.document_type}'
             os.makedirs(scrubbed_dir, exist_ok=True)  # Create directory if needed
             output_file = f'{scrubbed_dir}/{filename_without_extension}.txt'
             write_scrubbed_txt(output_file, scrubbed_text)
+            stdout_logger.info(f"Scrubbed file written to {output_file}")
+            # Write the scrubbed confidence data to a file.
             output_log.pii_scrubber_output_file = output_file
             confidence_dir = f'{output_dir}/scrubbed_text/{args.document_type}/scrubbed_confidence'
             os.makedirs(confidence_dir, exist_ok=True)
             confidence_file = f'{confidence_dir}/confidence-{filename_without_extension}.json'
             output_log.pii_scrubber_confidence_file = confidence_file
             write_confidence_record(confidence_file, result_output, orig_text)
+            # Log the changes to the database.
             session.add(output_log)
+        session.commit()
+
+
+def get_files_to_process(args: argparse.Namespace) -> list:
+    """
+    Gets a list of input files to process.
+
+    Parameters
+    ----------
+    args: argparse.Namespace
+        The parsed args.
+
+    Returns
+    -------
+    results: list
+      The list of input files.
+    """
+    sessionmaker = get_database_session(echo=args.debug_sql)
+    with sessionmaker.begin() as session:
+        query = (session.query(TranscriptionOutput)
+                 .outerjoin(TranscriptionInput.assets)
+                 .where(TranscriptionInput.document_type == args.document_type)
+                 .where(TranscriptionOutput.ocr_output_file != None)  # noqa: E711
+                 .where(TranscriptionOutput.pii_scrubber_output_file == None)  # noqa: E711
+                 .limit(args.chunk_size)
+                 .offset(args.offset))
+    return query.all()
 
 
 def parse_args() -> argparse.Namespace:

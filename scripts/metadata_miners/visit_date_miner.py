@@ -49,8 +49,7 @@ def get_date_pairs_within_days(
     return result_pairs
 
 
-def get_dog_dates(parsed_args: argparse.Namespace, subject_id: str) -> Tuple[
-    Optional[datetime.date], Optional[datetime.date]]:
+def get_dog_dates(parsed_args: argparse.Namespace, subject_id: str) -> Tuple[Optional[datetime.date], Optional[datetime.date]]:
     """
     Retrieves the dog's birth and death dates from the TSV files.
 
@@ -136,8 +135,7 @@ def update_existing_records(session: sqlalchemy.orm.session.Session, subject_id:
 
 
 def get_existing_date_pairs(session: sqlalchemy.orm.session.Session, subject_id: str, input_id: int,
-                            date_pairs: set[tuple[datetime, datetime]]) -> Set[
-    Tuple[datetime.date, datetime.date]]:
+                            date_pairs: set[tuple[datetime, datetime]]) -> Set[Tuple[datetime.date, datetime.date]]:
     """
     Retrieves existing date pairs from the database.
 
