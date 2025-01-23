@@ -1,3 +1,4 @@
+import re
 from typing import List
 
 """
@@ -53,5 +54,5 @@ class StringReplacer:
             The modified text blob with replaced strings.
         """
         for target in self.target_strings:
-            text_blob = text_blob.replace(target, self.replacement_string)
+            text_blob = re.sub(re.escape(target), self.replacement_string, text_blob, flags=re.IGNORECASE)
         return text_blob
