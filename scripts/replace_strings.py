@@ -1,6 +1,7 @@
 import argparse
 import csv
 import os
+import sys
 import traceback
 from concurrent.futures import ProcessPoolExecutor
 from typing import List, Optional
@@ -39,9 +40,16 @@ def read_target_strings(data_file: str, key_column: str) -> List[str]:
     FileNotFoundError
         If the specified data file does not exist.
     """
+    strings = []
+    # Detect file type based on extension
+    if data_file.endswith(".csv"):
+        delimiter = ","
+    elif data_file.endswith(".tsv"):
+        delimiter = "\t"
+    else:
+        raise ValueError("Invalid data file format. The data_file must be a CSV or TSV.")
     try:
-        strings = []
-        delimiter = "," if data_file.endswith(".csv") else "\t"
+        # Read the target strings from the specified column.
         with open(data_file, "r", newline="") as csvfile:
             reader = csv.DictReader(csvfile, delimiter=delimiter)
             if key_column not in reader.fieldnames:
@@ -121,6 +129,7 @@ def scrub_and_write_files(process_filepath_data: List[object], strings_to_replac
     """
     session_maker = get_database_session(echo=parsed_args.debug_sql)
     batch_size = parsed_args.chunk_size
+    success = True
     for i in range(0, len(process_filepath_data), batch_size):
         batch = process_filepath_data[i:i + batch_size]
         with session_maker.begin() as session:
@@ -130,11 +139,18 @@ def scrub_and_write_files(process_filepath_data: List[object], strings_to_replac
                     for output_log in results:
                         if output_log:
                             session.add(output_log)
+                        else:
+                            success = False
             else:
                 for output_log in batch:
                     result = process_file_wrapper(output_log, strings_to_replace, parsed_args)
                     if result:
                         session.add(result)
+                    else:
+                        success = False
+    if not success:
+        # If any files failed to process, exit with an error code.
+        sys.exit(1)
 
 
 def process_file_wrapper(output_log: object, strings_to_replace: List[str], parsed_args: argparse.Namespace) -> Optional[object]:
@@ -217,3 +233,5 @@ if __name__ == "__main__":
         scrub_and_write_files(results, target_strings, args, not args.no_multiprocessing)
     except Exception as e:
         stdout_logger.error(f"Error in main execution: {e}\n{traceback.format_exc()}")
+        # If an error occurs, exit with an error code.
+        sys.exit(1)
