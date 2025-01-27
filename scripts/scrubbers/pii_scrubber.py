@@ -10,6 +10,7 @@ from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                TranscriptionOutput,
                                                get_database_session)
 from vmrt_tesseract_utilities.logging import stdout_logger
+from vmrt_tesseract_utilities.scrubbing_utils import write_scrubbed_txt
 
 """
 Leverages presidio to attempt automatic PII stripping.
@@ -83,26 +84,6 @@ def scrub_pii(text: str, analyzer: AnalyzerEngine, threshold: float) -> tuple[st
         raise
 
 
-def write_scrubbed_txt(output_filename: str, anonymized_text: str) -> None:
-    """
-    Writes the anonymized text to an output file.
-
-    Parameters
-    ----------
-    output_filename : str
-        The path to the file.
-    anonymized_text : str
-        The anonymized text.
-    """
-    try:
-        if anonymized_text:
-            with open(output_filename, 'w') as f:
-                f.write(anonymized_text)
-    except Exception as e:
-        stdout_logger.error(f'Error writing scrubbed output: {e}')
-        raise
-
-
 def write_confidence_record(filename: str, filtered_results: list, original_text: str) -> None:
     """
     Writes the filtered results to a JSON file.
@@ -133,31 +114,6 @@ def write_confidence_record(filename: str, filtered_results: list, original_text
         raise
 
 
-def get_output_strategy_from_path(file_path: str) -> str:
-    """
-    Determines the type of path based on path segments.
-
-    Parameters
-    ----------
-    file_path : str
-        The file_path to check.
-
-    Returns
-    -------
-    str
-        The extracted path type.
-    """
-    parts = file_path.split(os.sep)
-    if 'doc' in parts:
-        return 'doc'
-    elif 'page' in parts:
-        return 'page'
-    elif "unstructured_text" in parts:
-        return parts[parts.index("unstructured_text") + 1]
-    else:
-        return 'page'  # Default to page
-
-
 def process_files(process_filepath_data: list, analyzer: AnalyzerEngine,
                   output_dir: str, threshold: float) -> None:
     """
@@ -175,24 +131,38 @@ def process_files(process_filepath_data: list, analyzer: AnalyzerEngine,
         The confidence threshold for PII detection.
     """
     sessionmaker = get_database_session(echo=args.debug_sql)
-    with sessionmaker.begin() as session:
+    with sessionmaker() as session:
         for output_log in process_filepath_data:
-            with open(str(output_log.ocr_output_file), 'r') as f:
+            session.add(output_log)  # Ensure the instance is bound to the session
+            # Use the replacement file if it exists, otherwise use the OCR output.
+            if hasattr(output_log, 'list_replacement_output_file') and output_log.list_replacement_output_file:
+                input_filepath = output_log.list_replacement_output_file
+            else:
+                input_filepath = output_log.ocr_output_file
+            # Read the original text from the input file.
+            with open(str(input_filepath), 'r') as f:
                 orig_text = f.read()
+            stdout_logger.info(f"Scrubbing {input_filepath}")
+            # Scrub the PII from the text.
             scrubbed_text, result_output = scrub_pii(orig_text, analyzer, threshold)
-            input_filename = os.path.basename(str(output_log.ocr_output_file))
+            # Write the scrubbed text to a file.
+            input_filename = os.path.basename(str(input_filepath))
             filename_without_extension = os.path.splitext(input_filename)[0]
             scrubbed_dir = f'{output_dir}/scrubbed_text/{args.document_type}/scrubbed_{args.document_type}'
             os.makedirs(scrubbed_dir, exist_ok=True)  # Create directory if needed
             output_file = f'{scrubbed_dir}/{filename_without_extension}.txt'
             write_scrubbed_txt(output_file, scrubbed_text)
+            stdout_logger.info(f"Scrubbed file written to {output_file}")
+            # Write the scrubbed confidence data to a file.
             output_log.pii_scrubber_output_file = output_file
             confidence_dir = f'{output_dir}/scrubbed_text/{args.document_type}/scrubbed_confidence'
             os.makedirs(confidence_dir, exist_ok=True)
             confidence_file = f'{confidence_dir}/confidence-{filename_without_extension}.json'
             output_log.pii_scrubber_confidence_file = confidence_file
             write_confidence_record(confidence_file, result_output, orig_text)
+            # Log the changes to the database.
             session.add(output_log)
+        session.commit()
 
 
 def get_files_to_process(args: argparse.Namespace) -> list:
@@ -214,8 +184,8 @@ def get_files_to_process(args: argparse.Namespace) -> list:
         query = (session.query(TranscriptionOutput)
                  .outerjoin(TranscriptionInput.assets)
                  .where(TranscriptionInput.document_type == args.document_type)
-                 .where(TranscriptionOutput.ocr_output_file != None)
-                 .where(TranscriptionOutput.pii_scrubber_output_file == None)
+                 .where(TranscriptionOutput.ocr_output_file != None)  # noqa: E711
+                 .where(TranscriptionOutput.pii_scrubber_output_file == None)  # noqa: E711
                  .limit(args.chunk_size)
                  .offset(args.offset))
     return query.all()
