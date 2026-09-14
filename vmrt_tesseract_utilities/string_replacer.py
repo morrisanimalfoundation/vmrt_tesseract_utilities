@@ -48,6 +48,7 @@ class StringReplacer:
         """
         self.target_strings = target_strings
         self.replacement_string = replacement_string
+        self._patterns = [self._build_pattern(target) for target in target_strings]
 
     @staticmethod
     def _expand_id_variants(target: str) -> List[str]:
@@ -79,6 +80,27 @@ class StringReplacer:
         # Preserve order while removing duplicates.
         return list(dict.fromkeys(variants))
 
+    @classmethod
+    def _build_pattern(cls, target: str) -> re.Pattern:
+        """
+        Builds a single compiled pattern matching a target string and all of its
+        ID variants, so the text only needs to be scanned once per target.
+
+        Parameters
+        ----------
+        target : str
+            The target string to build a pattern for.
+
+        Returns
+        -------
+        re.Pattern
+            A compiled, case-insensitive pattern matching any variant of the target.
+        """
+        # Longest first, so a variant that's a prefix of another isn't matched short.
+        variants = sorted(cls._expand_id_variants(target), key=len, reverse=True)
+        alternation = '|'.join(re.escape(variant) for variant in variants)
+        return re.compile(alternation, flags=re.IGNORECASE)
+
     def replace(self, text_blob: str) -> str:
         """
         Replaces the target strings within the text blob.
@@ -93,7 +115,6 @@ class StringReplacer:
         str
             The modified text blob with replaced strings.
         """
-        for target in self.target_strings:
-            for variant in self._expand_id_variants(target):
-                text_blob = re.sub(re.escape(variant), self.replacement_string, text_blob, flags=re.IGNORECASE)
+        for pattern in self._patterns:
+            text_blob = pattern.sub(self.replacement_string, text_blob)
         return text_blob
