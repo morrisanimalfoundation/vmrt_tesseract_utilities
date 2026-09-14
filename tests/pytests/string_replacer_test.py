@@ -151,3 +151,44 @@ def test_replace_non_id_string_unaffected_by_id_expansion():
     text_blob = "Jones-1 and Jones1 should not both be treated as ID variants."
     expected = "<ID> and Jones1 should not both be treated as ID variants."
     assert replacer.replace(text_blob) == expected
+
+
+def test_replace_non_grls_shaped_number_not_expanded():
+    """
+    Test that a digit-dash-digit string that isn't GRLS-ID-shaped isn't expanded.
+
+    Asserts:
+        A date range is only matched literally, not treated as an ID with variants.
+    """
+    replacer = StringReplacer(["2020-2022"], "<RANGE>")
+    text_blob = "Enrolled 2020-2022 and again in 20202022 and 2020-02022."
+    expected = "Enrolled <RANGE> and again in 20202022 and 2020-02022."
+    assert replacer.replace(text_blob) == expected
+
+
+def test_replace_ignores_blank_target_strings():
+    """
+    Test that blank/whitespace-only target strings are dropped rather than matched.
+
+    Asserts:
+        The text blob is returned unchanged instead of getting a replacement
+        inserted between every character.
+    """
+    replacer = StringReplacer(["", "   ", "old_string"], "new_string")
+    text_blob = "This is a text blob with old_string."
+    expected = "This is a text blob with new_string."
+    assert replacer.replace(text_blob) == expected
+
+
+def test_replace_id_variant_does_not_match_inside_longer_digit_run():
+    """
+    Test that an ID variant doesn't match as a substring of an unrelated, longer
+    digit run.
+
+    Asserts:
+        A no-dash ID variant embedded in a longer number is left untouched.
+    """
+    replacer = StringReplacer(["094-000520"], "<ID>")
+    text_blob = "Fax number 10940000520 should be left alone."
+    expected = "Fax number 10940000520 should be left alone."
+    assert replacer.replace(text_blob) == expected
