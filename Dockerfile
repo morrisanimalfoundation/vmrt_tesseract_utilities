@@ -4,7 +4,7 @@ ENV PYTHONPATH=\/workspace
 ARG USER_ID
 RUN apt-get update -y && \
     apt-get -y install poppler-utils tesseract-ocr yq build-essential libopenblas-dev libomp-dev &&\
-    git clone https://github.com/tesseract-ocr/tessdata.git /usr/share/tessdata &&\
+    git clone --depth 1 https://github.com/tesseract-ocr/tessdata.git /usr/share/tessdata &&\
     useradd -l -u ${USER_ID} -g sudo jenkins && \
     mkdir -m 0755 /home/jenkins && chown jenkins /home/jenkins
 USER jenkins
