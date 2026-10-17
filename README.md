@@ -203,9 +203,9 @@ spelling in this table:
 | --- | --- | --- | --- | --- | --- |
 | `create_transcription_process.py` | `--document-type` | — | — | `--debug-sql` | |
 | `transcribe_pdfs.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | |
-| `replace_strings.py` | `--document_type` | `--chunk_size` | `--offset` | `--debug-sql` | `--max-workers`, `--no-multiprocessing` |
+| `replace_strings.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--max-workers`, `--no-multiprocessing` |
 | `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config` |
-| `visit_date_miner.py` | — | `--chunk_size` | `--offset` | `--debug_sql` | `--visit_date_threshold`, `--search_unstructured_text_dir` |
+| `visit_date_miner.py` | — | `--chunk-size` | `--offset` | `--debug-sql` | `--visit_date_threshold`, `--search_unstructured_text_dir` |
 
 - **Document type** (`document`, `page`, or `block`; default `document`) controls how finely the OCR output
   is split: one text file per PDF, one per page, or one per detected line of text. Whatever you choose in

@@ -360,14 +360,14 @@ def parse_args() -> argparse.Namespace:
         action='store_true',
         help='Search unstructured text files',
     )
-    arg_parser.add_argument('--debug_sql', action='store_true', help='Enable SQL debugging')
+    arg_parser.add_argument('--debug-sql', '--debug_sql', action='store_true', help='Enable SQL debugging')
     arg_parser.add_argument(
         '--visit_date_threshold',
         type=int,
         default=3,
         help='The number of days to consider as the threshold relative to the visit dates.',
     )
-    arg_parser.add_argument('--chunk_size', type=int, help='The number of records to process.')
+    arg_parser.add_argument('--chunk-size', '--chunk_size', type=int, help='The number of records to process.')
     arg_parser.add_argument('--offset', type=int, default=0,
                             help='The number of records to skip before beginning processing.')
     return arg_parser.parse_args()
