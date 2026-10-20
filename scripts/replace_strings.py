@@ -6,10 +6,10 @@ import traceback
 from concurrent.futures import ProcessPoolExecutor
 from typing import List, Optional
 
+from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                TranscriptionOutput,
                                                get_database_session)
-from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.logging import stdout_logger
 from vmrt_tesseract_utilities.string_replacer import StringReplacer
 

@@ -4,7 +4,6 @@ import sys
 from typing import LiteralString
 
 from vmrt_tesseract_utilities.cli import normalize_flag_spelling
-
 from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                TranscriptionOutput,
                                                get_database_session)

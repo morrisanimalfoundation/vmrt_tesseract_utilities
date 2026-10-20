@@ -188,8 +188,8 @@ visit a document belongs to.
 
 ```bash
 python scripts/metadata_miners/visit_date_miner.py /workspace/output \
-  --visit_date_tsv=data/vet_visits.tsv \
-  --dog_profile_tsv=data/dog_profile.tsv
+  --visit-date-tsv=data/vet_visits.tsv \
+  --dog-profile-tsv=data/dog_profile.tsv
 ```
 
 ### Options
@@ -215,9 +215,9 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
   handled, so use `--offset` there instead (`--offset 1000`, then `--offset 2000`, and so on).
 - `--threshold` (step 4) is the minimum confidence score, from 0 to 1, a detection needs before it is
   removed. The default `0.0` removes everything the model flags.
-- `--visit_date_threshold` (step 5) is how many days apart a date in the text and a known visit date can be
+- `--visit-date-threshold` (step 5) is how many days apart a date in the text and a known visit date can be
   and still count as a match. The default is 3.
-- `--search_unstructured_text_dir` (step 5) also searches the raw OCR text for dates, not only the PII
+- `--search-unstructured-text-dir` (step 5) also searches the raw OCR text for dates, not only the PII
   scrubber's report.
 
 `scripts/scrubbers/scrub_txt_files.sh /workspace/output` is an alternative way to run step 4. It installs

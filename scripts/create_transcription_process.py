@@ -3,10 +3,10 @@ import os
 import re
 import sys
 
+from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                TranscriptionMetadata,
                                                get_database_session)
-from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.logging import stdout_logger
 
 """
