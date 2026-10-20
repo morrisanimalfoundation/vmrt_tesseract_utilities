@@ -196,8 +196,8 @@ python scripts/metadata_miners/visit_date_miner.py /workspace/output \
 
 Add `--help` to any script to see everything it accepts, e.g. `python scripts/transcribe_pdfs.py --help`.
 
-Flag spelling is not consistent between scripts — some use hyphens and some use underscores. Use the
-spelling in this table:
+All flags use hyphens (e.g. `--chunk-size`). The older underscore spellings (`--chunk_size`) are still accepted
+for backwards compatibility, so existing scripts and commands keep working. Use the hyphen form in new code:
 
 | Script | Document type | Batch size | Skip records | Show SQL | Other |
 | --- | --- | --- | --- | --- | --- |
@@ -205,7 +205,7 @@ spelling in this table:
 | `transcribe_pdfs.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | |
 | `replace_strings.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--max-workers`, `--no-multiprocessing` |
 | `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config` |
-| `visit_date_miner.py` | — | `--chunk-size` | `--offset` | `--debug-sql` | `--visit_date_threshold`, `--search_unstructured_text_dir` |
+| `visit_date_miner.py` | — | `--chunk-size` | `--offset` | `--debug-sql` | `--visit-date-threshold`, `--search-unstructured-text-dir` |
 
 - **Document type** (`document`, `page`, or `block`; default `document`) controls how finely the OCR output
   is split: one text file per PDF, one per page, or one per detected line of text. Whatever you choose in

@@ -1,10 +1,12 @@
 import argparse
 import os
 import re
+import sys
 
 from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                TranscriptionMetadata,
                                                get_database_session)
+from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.logging import stdout_logger
 
 """
@@ -66,7 +68,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--document-type', type=str, default='document',
                         help='The document type we want to produce, document, page or block.')
     parser.add_argument('--debug-sql', action='store_true', help='Enable SQL debugging')
-    return parser.parse_args()
+    return parser.parse_args(normalize_flag_spelling(sys.argv[1:]))
 
 
 if __name__ == '__main__':
