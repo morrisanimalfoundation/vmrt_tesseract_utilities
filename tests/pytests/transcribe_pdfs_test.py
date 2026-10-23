@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from scripts import transcribe_pdfs
 from vmrt_tesseract_utilities.database import (Base, TranscriptionInput,
                                                TranscriptionOutput)
-from vmrt_tesseract_utilities.tesseract_operations import NoTextFoundError
+from vmrt_tesseract_utilities.tesseract_operations import (NoTextFoundError,
+                                                           OcrSetupError)
 
 """
 Tests for the transcribe_pdfs script.
@@ -19,7 +20,10 @@ Tests for the transcribe_pdfs script.
 def engine(monkeypatch, tmp_path):
     """
     A SQLite database with one good, one blank and one broken PDF waiting to be transcribed.
+
+    The OCR setup check is skipped, since poppler and Tesseract aren't installed in CI.
     """
+    monkeypatch.setattr(transcribe_pdfs, 'check_ocr_setup', lambda: None)
     db_url = f'sqlite:///{tmp_path}/test.db'
     monkeypatch.setenv('SQL_CONNECTION_STRING', db_url)
     engine = create_engine(db_url)
@@ -101,3 +105,23 @@ def test_failed_files_are_only_retried_when_asked(monkeypatch, tmp_path, engine)
     _run(tmp_path, retry_failed=True)
     assert sorted(seen) == ['blank.pdf', 'broken.pdf']
     assert set(_statuses(engine).values()) == {('success', None)}
+
+
+def test_setup_error_stops_run_before_any_file(monkeypatch, tmp_path, engine):
+    """
+    Test that a setup problem stops the run instead of failing every file one by one.
+
+    Asserts:
+        OcrSetupError is raised, no file is processed, and no file is marked as failed.
+    """
+    def broken_setup():
+        raise OcrSetupError('Poppler is not installed or not on PATH (missing pdfinfo).')
+
+    def unexpected_process_row(self, input_path):
+        raise AssertionError('No file should be processed when setup is broken.')
+
+    monkeypatch.setattr(transcribe_pdfs, 'check_ocr_setup', broken_setup)
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', unexpected_process_row)
+    with pytest.raises(OcrSetupError, match='Poppler'):
+        _run(tmp_path)
+    assert set(_statuses(engine).values()) == {(None, None)}

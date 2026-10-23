@@ -4,7 +4,8 @@ import pytest
 
 from vmrt_tesseract_utilities import tesseract_operations
 from vmrt_tesseract_utilities.tesseract_operations import (
-    NoTextFoundError, TesseractOperationDoc, TesseractOperationPage)
+    NoTextFoundError, OcrSetupError, TesseractOperationDoc,
+    TesseractOperationPage, check_ocr_setup)
 
 """
 Tests for the Tesseract operations.
@@ -64,3 +65,62 @@ def test_unreadable_pdf_raises(monkeypatch):
     monkeypatch.setattr(tesseract_operations.pdf2image, 'convert_from_path', broken)
     with pytest.raises(ValueError, match='page count'):
         TesseractOperationDoc().process_row('broken.pdf')
+
+
+def _fake_setup(monkeypatch, tools=('pdfinfo', 'pdftoppm'), tessdata_exists=True, init_error=None):
+    """
+    Replaces the poppler lookup, the tessdata directory check and Tesseract start-up.
+    """
+    tess_api = mock.MagicMock()
+    if init_error:
+        tess_api.side_effect = init_error
+    monkeypatch.setattr(tesseract_operations.shutil, 'which', lambda tool: f'/usr/bin/{tool}' if tool in tools else None)
+    monkeypatch.setattr(tesseract_operations.os.path, 'isdir', lambda path: tessdata_exists)
+    monkeypatch.setattr(tesseract_operations.tesserocr, 'PyTessBaseAPI', tess_api)
+
+
+def test_check_ocr_setup_passes_when_tools_are_ready(monkeypatch):
+    """
+    Test that a working setup passes the check.
+
+    Asserts:
+        No error is raised.
+    """
+    _fake_setup(monkeypatch)
+    check_ocr_setup()
+
+
+def test_check_ocr_setup_missing_poppler(monkeypatch):
+    """
+    Test that a missing poppler install stops the run with a clear error.
+
+    Asserts:
+        OcrSetupError names poppler and the missing tool.
+    """
+    _fake_setup(monkeypatch, tools=('pdftoppm',))
+    with pytest.raises(OcrSetupError, match='Poppler is not installed.*pdfinfo'):
+        check_ocr_setup()
+
+
+def test_check_ocr_setup_missing_tessdata(monkeypatch):
+    """
+    Test that a missing tessdata directory stops the run with a clear error.
+
+    Asserts:
+        OcrSetupError names the missing directory.
+    """
+    _fake_setup(monkeypatch, tessdata_exists=False)
+    with pytest.raises(OcrSetupError, match='/nowhere/tessdata does not exist'):
+        check_ocr_setup('/nowhere/tessdata')
+
+
+def test_check_ocr_setup_invalid_tessdata(monkeypatch):
+    """
+    Test that tessdata Tesseract can't start with (e.g. no language files) stops the run.
+
+    Asserts:
+        OcrSetupError includes Tesseract's own message.
+    """
+    _fake_setup(monkeypatch, init_error=RuntimeError('Failed to init API, possibly an invalid tessdata path'))
+    with pytest.raises(OcrSetupError, match='could not start.*invalid tessdata path'):
+        check_ocr_setup()
