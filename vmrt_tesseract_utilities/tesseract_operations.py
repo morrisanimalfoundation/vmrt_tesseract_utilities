@@ -1,3 +1,5 @@
+import os
+import shutil
 from abc import ABC, abstractmethod
 
 import pdf2image
@@ -9,12 +11,48 @@ from vmrt_tesseract_utilities.logging import stdout_logger
 Provides Tesseract processing with different output scales (document, page, block).
 """
 
+TESSDATA_PATH = '/usr/share/tessdata'
+
 
 class NoTextFoundError(Exception):
     """
     Raised when Tesseract finds no recognizable text in a document.
     """
     pass
+
+
+class OcrSetupError(Exception):
+    """
+    Raised when the OCR tools aren't set up, so every file would fail.
+    """
+    pass
+
+
+def check_ocr_setup(tessdata_path: str = TESSDATA_PATH) -> None:
+    """
+    Checks that poppler and Tesseract are usable before any file is processed.
+
+    Parameters
+    ----------
+    tessdata_path: str
+      The directory holding Tesseract's language data.
+
+    Raises
+    ------
+    OcrSetupError
+      If poppler isn't installed, or Tesseract can't start with the given tessdata.
+    """
+    missing = [tool for tool in ('pdfinfo', 'pdftoppm') if shutil.which(tool) is None]
+    if missing:
+        raise OcrSetupError(f'Poppler is not installed or not on PATH (missing {", ".join(missing)}). '
+                            'pdf2image needs it to read PDFs.')
+    if not os.path.isdir(tessdata_path):
+        raise OcrSetupError(f'Tesseract data directory {tessdata_path} does not exist.')
+    try:
+        with tesserocr.PyTessBaseAPI(tessdata_path):
+            pass
+    except RuntimeError as e:
+        raise OcrSetupError(f'Tesseract could not start with the data in {tessdata_path}: {e}') from e
 
 
 class TesseractOperationBase(ABC):
@@ -41,7 +79,7 @@ class TesseractOperationDoc(TesseractOperationBase):
         confidence_scores = []
         document_content = ''
         for pg, image in enumerate(images):
-            with tesserocr.PyTessBaseAPI('/usr/share/tessdata') as api:
+            with tesserocr.PyTessBaseAPI(TESSDATA_PATH) as api:
                 api.SetVariable('debug_file', '/dev/null')
                 api.SetImage(image)
                 ocr_result = api.GetUTF8Text()
@@ -65,7 +103,7 @@ class TesseractOperationPage(TesseractOperationBase):
         images = pdf2image.convert_from_path(input_path)
         stdout_logger.info(f'Item {input_path} has {len(images)} pages.')
         for pg, image in enumerate(images):
-            with tesserocr.PyTessBaseAPI('/usr/share/tessdata') as api:
+            with tesserocr.PyTessBaseAPI(TESSDATA_PATH) as api:
                 api.SetVariable('debug_file', '/dev/null')
                 api.SetImage(image)
                 ocr_result = api.GetUTF8Text()
@@ -86,7 +124,7 @@ class TesseractOperationBlock(TesseractOperationBase):
         images = pdf2image.convert_from_path(input_path)
         stdout_logger.info(f'Item {input_path} has {len(images)} pages.')
         for pg, image in enumerate(images):
-            with tesserocr.PyTessBaseAPI('/usr/share/tessdata') as api:
+            with tesserocr.PyTessBaseAPI(TESSDATA_PATH) as api:
                 api.SetImage(image)
                 boxes = api.GetComponentImages(tesserocr.RIL.TEXTLINE, True)
                 for i, (im, box, _, _) in enumerate(boxes):

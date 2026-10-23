@@ -11,7 +11,8 @@ from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                get_database_session)
 from vmrt_tesseract_utilities.logging import stdout_logger
 from vmrt_tesseract_utilities.tesseract_operations import (
-    TesseractOperationBlock, TesseractOperationDoc, TesseractOperationPage)
+    OcrSetupError, TesseractOperationBlock, TesseractOperationDoc,
+    TesseractOperationPage, check_ocr_setup)
 
 """
 Runs Tesseract on items stored in the input database.
@@ -62,15 +63,22 @@ def run_tesseract(args: argparse.Namespace) -> None:
     The process is documented in the `process_output` table.
     Each input's `ocr_status` is set to 'success' or 'failed', with the error saved in `ocr_error`.
     Failed inputs are skipped on later runs unless `--retry-failed` is passed.
+    Setup problems that would fail every file stop the run before any file is touched.
 
     Parameters
     ----------
     args: argparse.Namespace
         The parsed args.
+
+    Raises
+    ------
+    OcrSetupError
+        If poppler or Tesseract isn't usable.
     """
     base_path = _get_and_create_output_directory(args)
     if args.document_type not in ('document', 'page', 'block',):
         raise ValueError("'--document-type' must be either 'document', 'page' or 'block'")
+    check_ocr_setup()
     stdout_logger.info(f'Here we go with document type: {args.document_type}')
     if args.document_type == 'document':
         op = TesseractOperationDoc()
@@ -163,4 +171,8 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == '__main__':
     provided_args = parse_args()
-    run_tesseract(provided_args)
+    try:
+        run_tesseract(provided_args)
+    except OcrSetupError as e:
+        stdout_logger.error(f'Stopping before transcribing anything: {e}')
+        sys.exit(1)
