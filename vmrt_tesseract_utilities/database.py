@@ -141,6 +141,6 @@ def get_database_session(**kwargs) -> sessionmaker:
     """
     sql_url = os.getenv('SQL_CONNECTION_STRING')
     if sql_url is None:
-        RuntimeError('SQL_CONNECTION_STRING environment variable is not set.')
+        raise RuntimeError('SQL_CONNECTION_STRING environment variable is not set.')
     engine = create_engine(sql_url, **kwargs)
     return sessionmaker(engine)
