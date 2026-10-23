@@ -60,6 +60,8 @@ def run_tesseract(args: argparse.Namespace) -> None:
     Notes
     -----
     The process is documented in the `process_output` table.
+    Each input's `ocr_status` is set to 'success' or 'failed', with the error saved in `ocr_error`.
+    Failed inputs are skipped on later runs unless `--retry-failed` is passed.
 
     Parameters
     ----------
@@ -83,9 +85,10 @@ def run_tesseract(args: argparse.Namespace) -> None:
                  # input_file has a case-sensitive collation, and file extensions can be in any case.
                  .where(func.lower(TranscriptionInput.input_file).like('%.pdf'))
                  .where(TranscriptionInput.document_type == args.document_type)
-                 .where(TranscriptionOutput.ocr_output_file == None)  # noqa: E711
-                 .limit(args.chunk_size)
-                 .offset(args.offset))
+                 .where(TranscriptionOutput.ocr_output_file == None))  # noqa: E711
+        if not args.retry_failed:
+            query = query.where(TranscriptionInput.ocr_status.is_distinct_from('failed'))
+        query = query.limit(args.chunk_size).offset(args.offset)
         count = query.count()
         stdout_logger.info(f'Found {count} files to transcribe.')
         failures = []
@@ -94,9 +97,14 @@ def run_tesseract(args: argparse.Namespace) -> None:
             try:
                 output = op.process_row(db_input.input_file)
             except Exception as e:
-                stdout_logger.error(f'Failed to transcribe {db_input.input_file}: {e}')
-                failures.append((db_input.input_file, f'{type(e).__name__}: {e}'))
+                error = f'{type(e).__name__}: {e}'
+                stdout_logger.error(f'Failed to transcribe {db_input.input_file}: {error}')
+                failures.append((db_input.input_file, error))
+                db_input.ocr_status = 'failed'
+                db_input.ocr_error = error
                 continue
+            db_input.ocr_status = 'success'
+            db_input.ocr_error = None
             for ocr_result in output:
                 bits = os.path.splitext(os.path.basename(db_input.input_file))
                 output_path = f'{base_path}/{bits[0]}-{ocr_result["page"]}-{ocr_result["block"]}.txt'
@@ -147,6 +155,8 @@ def parse_args() -> argparse.Namespace:
                         help='The number of records to process.')
     parser.add_argument('--offset', type=int, default=0,
                         help='The number of records to skip before beginning processing.')
+    parser.add_argument('--retry-failed', action='store_true',
+                        help='Also process files that failed on an earlier run.')
     parser.add_argument('--debug-sql', action='store_true', help='Enable SQL debugging')
     return parser.parse_args(normalize_flag_spelling(sys.argv[1:]))
 
