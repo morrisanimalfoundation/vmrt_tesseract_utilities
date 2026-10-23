@@ -188,24 +188,24 @@ visit a document belongs to.
 
 ```bash
 python scripts/metadata_miners/visit_date_miner.py /workspace/output \
-  --visit_date_tsv=data/vet_visits.tsv \
-  --dog_profile_tsv=data/dog_profile.tsv
+  --visit-date-tsv=data/vet_visits.tsv \
+  --dog-profile-tsv=data/dog_profile.tsv
 ```
 
 ### Options
 
 Add `--help` to any script to see everything it accepts, e.g. `python scripts/transcribe_pdfs.py --help`.
 
-Flag spelling is not consistent between scripts — some use hyphens and some use underscores. Use the
-spelling in this table:
+All flags use hyphens (e.g. `--chunk-size`). The older underscore spellings (`--chunk_size`) are still accepted
+for backwards compatibility, so existing scripts and commands keep working. Use the hyphen form in new code:
 
 | Script | Document type | Batch size | Skip records | Show SQL | Other |
 | --- | --- | --- | --- | --- | --- |
 | `create_transcription_process.py` | `--document-type` | — | — | `--debug-sql` | |
 | `transcribe_pdfs.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | |
-| `replace_strings.py` | `--document_type` | `--chunk_size` | `--offset` | `--debug-sql` | `--max-workers`, `--no-multiprocessing` |
+| `replace_strings.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--max-workers`, `--no-multiprocessing` |
 | `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config` |
-| `visit_date_miner.py` | — | `--chunk_size` | `--offset` | `--debug_sql` | `--visit_date_threshold`, `--search_unstructured_text_dir` |
+| `visit_date_miner.py` | — | `--chunk-size` | `--offset` | `--debug-sql` | `--visit-date-threshold`, `--search-unstructured-text-dir` |
 
 - **Document type** (`document`, `page`, or `block`; default `document`) controls how finely the OCR output
   is split: one text file per PDF, one per page, or one per detected line of text. Whatever you choose in
@@ -215,9 +215,9 @@ spelling in this table:
   handled, so use `--offset` there instead (`--offset 1000`, then `--offset 2000`, and so on).
 - `--threshold` (step 4) is the minimum confidence score, from 0 to 1, a detection needs before it is
   removed. The default `0.0` removes everything the model flags.
-- `--visit_date_threshold` (step 5) is how many days apart a date in the text and a known visit date can be
+- `--visit-date-threshold` (step 5) is how many days apart a date in the text and a known visit date can be
   and still count as a match. The default is 3.
-- `--search_unstructured_text_dir` (step 5) also searches the raw OCR text for dates, not only the PII
+- `--search-unstructured-text-dir` (step 5) also searches the raw OCR text for dates, not only the PII
   scrubber's report.
 
 `scripts/scrubbers/scrub_txt_files.sh /workspace/output` is an alternative way to run step 4. It installs
@@ -370,3 +370,12 @@ rather than with `git add .`, so nothing extra is swept in.
 - **Linting**: `./sort_and_lint.sh` runs `isort` and `flake8` (line length is not enforced). Install
   dependencies first with `pip install -r requirements/ci_requirements.txt`.
 - Both checks run automatically on every pull request to `main`.
+- **Dependencies**: `requirements.ini` lists the direct dependencies and `requirements.txt` is generated from
+  it, so don't edit `requirements.txt` by hand. To regenerate it, run this from the repository folder, outside
+  the container (it uses the same Python version as the Docker image):
+  ```bash
+  docker run --rm -v "$PWD:/src" -w /src python:3.11 sh -c "pip install -q pip-tools && pip-compile requirements.ini"
+  ```
+  Existing pins are kept; add `--upgrade` only when you mean to update them. Keep `presidio_analyzer[transformers]`
+  and `torch` in `requirements.ini` (the PII scrubber needs them) and keep the CPU-only PyTorch index line at the
+  top, which stops `torch` from pulling in several GB of CUDA libraries.

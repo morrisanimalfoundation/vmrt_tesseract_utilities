@@ -1,11 +1,13 @@
 import argparse
 import json
 import os
+import sys
 
 from presidio_analyzer import AnalyzerEngine, RecognizerResult
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_anonymizer import AnonymizerEngine
 
+from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                TranscriptionOutput,
                                                get_database_session)
@@ -215,7 +217,7 @@ def parse_args() -> argparse.Namespace:
                         help='The config file for the NLP engine.')
     parser.add_argument('--threshold', required=False, type=float, default=0.0,
                         help='The target confidence threshold for scores.')
-    return parser.parse_args()
+    return parser.parse_args(normalize_flag_spelling(sys.argv[1:]))
 
 
 if __name__ == '__main__':

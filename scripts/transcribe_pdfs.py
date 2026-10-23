@@ -1,7 +1,9 @@
 import argparse
 import os
+import sys
 from typing import LiteralString
 
+from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                TranscriptionOutput,
                                                get_database_session)
@@ -64,7 +66,7 @@ def run_tesseract(args: argparse.Namespace) -> None:
     """
     base_path = _get_and_create_output_directory(args)
     if args.document_type not in ('document', 'page', 'block',):
-        raise ValueError("'--document_type' must be either 'document', 'page' or 'block'")
+        raise ValueError("'--document-type' must be either 'document', 'page' or 'block'")
     stdout_logger.info(f'Here we go with document type: {args.document_type}')
     if args.document_type == 'document':
         op = TesseractOperationDoc()
@@ -119,7 +121,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--offset', type=int, default=0,
                         help='The number of records to skip before beginning processing.')
     parser.add_argument('--debug-sql', action='store_true', help='Enable SQL debugging')
-    return parser.parse_args()
+    return parser.parse_args(normalize_flag_spelling(sys.argv[1:]))
 
 
 if __name__ == '__main__':

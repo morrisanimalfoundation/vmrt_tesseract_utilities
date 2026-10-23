@@ -10,6 +10,7 @@ from typing import List, Optional
 
 from sqlalchemy import and_
 
+from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.database import (StringReplacementCompletion,
                                                StringReplacementPass,
                                                TranscriptionInput,
@@ -315,13 +316,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("key_column", help="Name of the column in the CSV/TSV containing the keys.")
     parser.add_argument("replacement_string", help="The string to replace the keys with.")
     parser.add_argument("output_dir", help="Path to the output directory.")
-    parser.add_argument("--document_type", type=str, default="document", help="The document type we want to produce, document, page or block.")
-    parser.add_argument("--chunk_size", type=int, default=1000, help="The number of records to process.")
+    parser.add_argument("--document-type", type=str, default="document", help="The document type we want to produce, document, page or block.")
+    parser.add_argument("--chunk-size", type=int, default=1000, help="The number of records to process.")
     # parser.add_argument("--offset", type=int, default=0, help="The number of records to skip before beginning processing.")
     parser.add_argument("--debug-sql", action="store_true", help="Enable SQL debugging")
     parser.add_argument("--no-multiprocessing", action="store_true", help="Disable multiprocessing for debugging")
     parser.add_argument("--max-workers", type=int, default=4, help="Maximum number of worker processes for multiprocessing")
-    return parser.parse_args()
+    return parser.parse_args(normalize_flag_spelling(sys.argv[1:]))
 
 
 if __name__ == "__main__":
