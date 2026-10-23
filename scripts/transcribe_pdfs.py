@@ -85,9 +85,15 @@ def run_tesseract(args: argparse.Namespace) -> None:
                  .offset(args.offset))
         count = query.count()
         stdout_logger.info(f'Found {count} files to transcribe.')
+        failures = []
         for db_input, db_output in query.all():
             db_output_logs = []
-            output = op.process_row(db_input.input_file)
+            try:
+                output = op.process_row(db_input.input_file)
+            except Exception as e:
+                stdout_logger.error(f'Failed to transcribe {db_input.input_file}: {e}')
+                failures.append((db_input.input_file, f'{type(e).__name__}: {e}'))
+                continue
             for ocr_result in output:
                 bits = os.path.splitext(os.path.basename(db_input.input_file))
                 output_path = f'{base_path}/{bits[0]}-{ocr_result["page"]}-{ocr_result["block"]}.txt'
@@ -99,7 +105,25 @@ def run_tesseract(args: argparse.Namespace) -> None:
                 db_output.transcription_input = db_input
                 db_output_logs.append(db_output)
                 session.add_all(db_output_logs)
-    stdout_logger.info('All done!')
+    _log_run_summary(count, failures)
+
+
+def _log_run_summary(count: int, failures: list) -> None:
+    """
+    Logs how many files were transcribed and lists each failure.
+
+    Parameters
+    ----------
+    count: int
+      The number of files the run attempted.
+    failures: list
+      (input_file, error) tuples for the files that failed.
+    """
+    stdout_logger.info(f'All done! Transcribed {count - len(failures)} of {count} files.')
+    if failures:
+        stdout_logger.warning(f'{len(failures)} file(s) failed:')
+        for input_file, error in failures:
+            stdout_logger.warning(f'  {input_file}: {error}')
 
 
 def parse_args() -> argparse.Namespace:
