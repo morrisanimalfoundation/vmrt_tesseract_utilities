@@ -6,11 +6,13 @@
 #
 --extra-index-url https://download.pytorch.org/whl/cpu
 
+annotated-doc==0.0.5
+    # via typer-slim
 annotated-types==0.6.0
     # via pydantic
 azure-core==1.32.0
     # via presidio-anonymizer
-blis==1.1.0
+blis==1.3.3
     # via thinc
 catalogue==2.0.10
     # via
@@ -18,21 +20,18 @@ catalogue==2.0.10
     #   srsly
     #   thinc
 certifi==2024.12.14
-    # via
-    #   httpcore
-    #   httpx
-    #   requests
+    # via requests
 charset-normalizer==3.4.0
     # via requests
 click==8.1.8
-    # via typer
+    # via typer-slim
 cloudpathlib==0.20.0
     # via weasel
 confection==0.1.5
     # via
     #   thinc
     #   weasel
-cymem==2.0.10
+cymem==2.0.13
     # via
     #   preshed
     #   spacy
@@ -58,29 +57,17 @@ huggingface-hub==0.36.2
     #   transformers
 idna==3.7
     # via
-    #   anyio
-    #   httpx
     #   requests
     #   tldextract
 jinja2==3.1.5
     # via
     #   spacy
     #   torch
-langcodes==3.5.0
-    # via spacy
-language-data==1.3.0
-    # via langcodes
-marisa-trie==1.2.1
-    # via language-data
-markdown-it-py==3.0.0
-    # via rich
 markupsafe==3.0.2
     # via jinja2
-mdurl==0.1.2
-    # via markdown-it-py
 mpmath==1.3.0
     # via sympy
-murmurhash==1.0.11
+murmurhash==1.0.15
     # via
     #   preshed
     #   spacy
@@ -127,8 +114,6 @@ pydantic==2.7.1
     #   weasel
 pydantic-core==2.18.2
     # via pydantic
-pygments==2.18.0
-    # via rich
 pymysql==1.1.1
     # via -r requirements.ini
 python-dateutil==2.9.0.post0
@@ -155,19 +140,15 @@ requests==2.32.3
     #   weasel
 requests-file==2.1.0
     # via tldextract
-rich==13.9.4
-    # via typer
 safetensors==0.8.0
     # via transformers
-shellingham==1.5.4
-    # via typer
 six==1.16.0
     # via
     #   azure-core
     #   python-dateutil
 smart-open==7.1.0
     # via weasel
-spacy==3.8.2
+spacy==3.8.8
     # via
     #   presidio-analyzer
     #   spacy-huggingface-pipelines
@@ -179,7 +160,7 @@ spacy-loggers==1.0.5
     # via spacy
 sqlalchemy==2.0.37
     # via -r requirements.ini
-srsly==2.5.0
+srsly==2.5.4
     # via
     #   confection
     #   spacy
@@ -189,7 +170,7 @@ sympy==1.14.0
     # via torch
 tesserocr==2.7.1
     # via -r requirements.ini
-thinc==8.3.3
+thinc==8.3.11
     # via spacy
 tldextract==5.1.3
     # via presidio-analyzer
@@ -208,20 +189,18 @@ transformers==4.57.6
     # via
     #   presidio-analyzer
     #   spacy-huggingface-pipelines
-typer==0.15.1
+typer-slim==0.21.2
     # via
     #   spacy
     #   weasel
 typing-extensions==4.11.0
     # via
-    #   anyio
     #   azure-core
     #   huggingface-hub
     #   pydantic
     #   pydantic-core
     #   sqlalchemy
     #   torch
-    #   typer
 urllib3==2.3.0
     # via requests
 wasabi==1.1.3
@@ -229,7 +208,7 @@ wasabi==1.1.3
     #   spacy
     #   thinc
     #   weasel
-weasel==0.4.1
+weasel==0.4.3
     # via spacy
 wrapt==1.17.0
     # via smart-open
