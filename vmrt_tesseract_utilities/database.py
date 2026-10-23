@@ -3,7 +3,7 @@ import os
 from typing import List, Optional
 
 from dotenv import load_dotenv
-from sqlalchemy import (DateTime, Float, ForeignKey, Integer, String,
+from sqlalchemy import (DateTime, Float, ForeignKey, Integer, String, Text,
                         create_engine, func)
 from sqlalchemy.orm import (DeclarativeBase, Mapped, mapped_column,
                             relationship, sessionmaker)
@@ -31,6 +31,9 @@ class TranscriptionInput(Base):
     document_type: Mapped[str] = mapped_column(String(30))
     created: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, server_default=func.now())
     input_file: Mapped[Optional[str]] = mapped_column(String(255))
+    # 'success' or 'failed' once transcribe_pdfs has tried this file, None before that.
+    ocr_status: Mapped[Optional[str]] = mapped_column(String(20))
+    ocr_error: Mapped[Optional[str]] = mapped_column(Text)
     assets: Mapped[List['TranscriptionOutput']] = relationship(
         back_populates='transcription_input', cascade='all, delete-orphan'
     )
