@@ -129,11 +129,12 @@ subject ID are skipped.
 ./run.sh
 ```
 
-The first run downloads and builds everything, which takes a while — expect to wait several minutes at
-least. Later runs are much faster. When it finishes you will see a new prompt that looks something like this:
+The first run downloads the prebuilt workspace image (about 1.4 GB) and the MySQL image, which takes a few
+minutes depending on your connection. Later runs only download what has changed. When it finishes you will see
+a new prompt that looks something like this:
 
 ```
-jenkins@3f2a9c1d7e4b:/workspace$
+vmrt@3f2a9c1d7e4b:/workspace$
 ```
 
 You are now **inside the container**. `/workspace` is this repository, and `/data` is the EMR folder you
@@ -335,7 +336,8 @@ If you are new to git, these are the only commands you need to use this project:
   ```bash
   git pull
   ```
-  If `./run.sh` behaves differently after a pull, that is expected — it rebuilds whatever changed.
+  `./run.sh` also downloads the latest workspace image each time it starts, so you don't need to do anything
+  extra to get updated tools.
 - **See what you have changed:**
   ```bash
   git status
@@ -370,6 +372,17 @@ rather than with `git add .`, so nothing extra is swept in.
 - **Linting**: `./sort_and_lint.sh` runs `isort` and `flake8` (line length is not enforced). Install
   dependencies first with `pip install -r requirements/ci_requirements.txt`.
 - Both checks run automatically on every pull request to `main`.
+- **Docker image**: `./run.sh` downloads a prebuilt image from
+  `ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities`. The image holds the tools and Python packages
+  only; the code is mounted from your copy of the repository, so code changes never need a new image. The
+  `Docker Image` workflow (`.github/workflows/docker_image.yaml`) rebuilds and publishes it when `Dockerfile`
+  or `requirements.txt` change on `main`, and weekly for security updates. Pull requests that touch those files
+  are built and checked with `tests/docker_smoke_test.py` but not published. If you are changing `Dockerfile`
+  or `requirements.txt`, use `./run.sh --build` to build the image locally instead (a couple of minutes), and
+  run the smoke test from the repository folder:
+  ```bash
+  docker run --rm --user 1234:1234 -v "$PWD:/workspace" ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities:main python tests/docker_smoke_test.py
+  ```
 - **Dependencies**: `requirements.ini` lists the direct dependencies and `requirements.txt` is generated from
   it, so don't edit `requirements.txt` by hand. To regenerate it, run this from the repository folder, outside
   the container (it uses the same Python version as the Docker image):

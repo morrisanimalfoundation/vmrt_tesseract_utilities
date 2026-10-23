@@ -1,0 +1,138 @@
+# Builds the workspace Docker image for Intel (amd64) and Apple Silicon (arm64), smoke-tests it, and on
+# main publishes it to ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities, which run.sh pulls.
+# Pull requests are built and tested but not published. The weekly run picks up security updates to the
+# python:3.11 base image.
+name: Docker Image
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - Dockerfile
+      - requirements.txt
+      - tests/docker_smoke_test.py
+      - .github/workflows/docker_image.yaml
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - Dockerfile
+      - requirements.txt
+      - tests/docker_smoke_test.py
+      - .github/workflows/docker_image.yaml
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities
+  PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set platform slug
+        run: echo "PLATFORM_SLUG=${{ matrix.platform }}" | tr / - >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          pull: true
+          load: true
+          tags: vmrt-workspace:test
+          cache-from: type=gha,scope=${{ env.PLATFORM_SLUG }}
+          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_SLUG }}
+
+      - name: Smoke test
+        run: docker run --rm --user 1234:1234 -v "$PWD:/workspace" vmrt-workspace:test python tests/docker_smoke_test.py
+
+      - name: Log in to GitHub Container Registry
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Reuses the layers from the Build step, so this only uploads the image.
+      - name: Push by digest
+        id: push
+        if: env.PUBLISH == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ env.PLATFORM_SLUG }}
+
+      - name: Save digest
+        if: env.PUBLISH == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          digest="${{ steps.push.outputs.digest }}"
+          touch "$RUNNER_TEMP/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v7
+        if: env.PUBLISH == 'true'
+        with:
+          name: digest-${{ env.PLATFORM_SLUG }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Combines the per-platform images into one multi-platform tag, so `docker pull` picks the right one.
+  publish:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Create and push the multi-platform tags
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          sources=()
+          for digest in *; do sources+=("$IMAGE@sha256:$digest"); done
+          docker buildx imagetools create \
+            --tag "$IMAGE:main" \
+            --tag "$IMAGE:sha-${GITHUB_SHA::7}" \
+            --annotation "index:org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            --annotation "index:org.opencontainers.image.description=VMRT Tesseract Utilities workspace image" \
+            "${sources[@]}"
+
+      - name: Inspect
+        run: docker buildx imagetools inspect "$IMAGE:main"

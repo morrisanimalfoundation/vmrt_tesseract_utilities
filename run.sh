@@ -12,8 +12,17 @@ if [[ -z $SQL_PASSWORD ]]; then
 fi
 
 
-# Build the Docker images with the current user's ID.
-docker compose build --build-arg USER_ID=$(id -u ${USER})
+# Run the workspace container as the current user (see docker-compose.yml).
+export HOST_UID=$(id -u) HOST_GID=$(id -g)
+
+# Get the workspace image: download the prebuilt one, or build it locally with `./run.sh --build`
+# (needed when you change the Dockerfile or requirements.txt).
+if [[ "$1" == "--build" ]]; then
+  docker compose build
+elif ! docker compose pull vmrt-emr-workspace; then
+  # `docker compose up` below then uses the copy you already have, or builds one if there isn't one.
+  echo "Could not download the latest prebuilt image. Using your existing copy, or building it locally if there is none (this takes a few minutes)."
+fi
 
 # Start the containers in detached mode.
 docker compose up -d
