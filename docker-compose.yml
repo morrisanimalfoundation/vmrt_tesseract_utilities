@@ -11,7 +11,11 @@ services:
       MYSQL_ROOT_PASSWORD: $SQL_PASSWORD
   vmrt-emr-workspace:
     container_name: vmrt-emr-workspace
+    # Prebuilt by .github/workflows/docker_image.yaml; `./run.sh --build` builds it locally instead.
+    image: ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities:main
     build: .
+    # Run as the host user so files written to ./output belong to you. run.sh sets these.
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     command: tail -f /dev/null
     volumes:
       - ./:/workspace
