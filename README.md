@@ -377,10 +377,10 @@ rather than with `git add .`, so nothing extra is swept in.
   `ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities`. The image holds the tools and Python packages
   only; the code is mounted from your copy of the repository, so code changes never need a new image. The
   `Docker Image` workflow (`.github/workflows/docker_image.yaml`) rebuilds and publishes it when `Dockerfile`
-  or `requirements.txt` change on `main`, and weekly for security updates. Pull requests that touch those files
-  are built and checked with `tests/docker_smoke_test.py` but not published. If you are changing `Dockerfile`
-  or `requirements.txt`, use `./run.sh --build` to build the image locally instead (a couple of minutes), and
-  run the smoke test from the repository folder:
+  or the requirements change on `main`, and weekly (from scratch, with Debian's latest security fixes). Pull
+  requests that touch those files are built and checked with `tests/docker_smoke_test.py` but not published.
+  If you are changing `Dockerfile`, `requirements.in`, or `requirements.txt`, use `./run.sh --build` to build
+  the image locally instead (a few minutes), and run the smoke test from the repository folder:
   ```bash
   docker run --rm --user 1234:1234 -v "$PWD:/workspace" ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities:main python tests/docker_smoke_test.py
   ```
@@ -390,15 +390,24 @@ rather than with `git add .`, so nothing extra is swept in.
   ```bash
   gh attestation verify oci://ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities:main -R morrisanimalfoundation/vmrt_tesseract_utilities
   ```
-- **Dependencies**: `requirements.ini` lists the direct dependencies and `requirements.txt` is generated from
+- **Security**: pull requests that change the image fail if it has a critical vulnerability with a fix
+  available. Every published image (amd64 and arm64) is scanned too, and its high and critical findings that
+  have a fix appear under the repository's **Security → Code scanning** tab. When a pinned Python package gets a known vulnerability
+  with a fix, Dependabot opens a pull request that updates it in `requirements.in` and `requirements.txt`.
+- **Dependencies**: `requirements.in` lists the direct dependencies and `requirements.txt` is generated from
   it, so don't edit `requirements.txt` by hand. To regenerate it, run this from the repository folder, outside
   the container (it uses the same Python version as the Docker image):
   ```bash
-  docker run --rm -v "$PWD:/src" -w /src python:3.11 sh -c "pip install -q pip-tools && pip-compile requirements.ini"
+  docker run --rm -v "$PWD:/src" -w /src python:3.11 sh -c "pip install -q pip-tools==7.6.2 && pip-compile --strip-extras requirements.in"
   ```
   Existing pins are kept; add `--upgrade` only when you mean to update them. Keep `presidio_analyzer[transformers]`
-  and `torch` in `requirements.ini` (the PII scrubber needs them) and keep the CPU-only PyTorch index line at the
-  top, which stops `torch` from pulling in several GB of CUDA libraries.
+  and `torch` in `requirements.in` (the PII scrubber needs them) and keep the CPU-only PyTorch index line at the
+  top, which stops `torch` from pulling in several GB of CUDA libraries. The `Requirements Check` workflow fails
+  a pull request if a change to `requirements.in` (a package added, removed, or given a different version) isn't
+  reflected in `requirements.txt`. It can't tell when a pin was edited by hand in `requirements.txt` to another
+  version that still fits, so always regenerate the file with the command above.
+  `requirements/pytest_requirements.txt` pins only the test tools and takes every other version from
+  `requirements.txt`, so a version change there applies to the tests too.
 
 ## License
 
