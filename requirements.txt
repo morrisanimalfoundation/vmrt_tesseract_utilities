@@ -36,7 +36,7 @@ cymem==2.0.13
     #   preshed
     #   spacy
     #   thinc
-filelock==3.16.1
+filelock==4.2.1
     # via
     #   huggingface-hub
     #   tldextract
