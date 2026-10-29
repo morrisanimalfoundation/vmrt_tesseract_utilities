@@ -1,4 +1,4 @@
-# Builds the workspace Docker image for Intel (amd64) and Apple Silicon (arm64), smoke-tests it, and on
+# Builds the workspace Docker image for Intel (amd64) and Apple Silicon (arm64), tests it, and on
 # main publishes it to ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities, which run.sh pulls.
 # Pull requests are built and tested but not published. The weekly run picks up security updates to the
 # python:3.11 base image.
@@ -13,13 +13,19 @@ on:
       - requirements.txt
       - tests/docker_smoke_test.py
       - .github/workflows/docker_image.yaml
+  # Pull requests also run for code and test changes, since the tests below run that code against the image's
+  # packages. Those changes don't alter the image, so they don't republish it on main.
   pull_request:
     branches: [ "main" ]
     paths:
       - Dockerfile
       - requirements.in
       - requirements.txt
-      - tests/docker_smoke_test.py
+      - requirements/pytest_requirements.txt
+      - pytest.ini
+      - scripts/**
+      - tests/**
+      - vmrt_tesseract_utilities/**
       - .github/workflows/docker_image.yaml
   schedule:
     - cron: "0 6 * * 1"
@@ -84,6 +90,18 @@ jobs:
 
       - name: Smoke test
         run: docker run --rm --user 1234:1234 -v "$PWD:/workspace" vmrt-workspace:test python tests/docker_smoke_test.py
+
+      # Runs the unit tests against the exact package versions in the image, including the tests that need
+      # Tesseract or the PII scrubber's models. Every test must run here, so the step fails if any is skipped.
+      - name: Unit tests
+        run: |
+          docker run --rm --user 1234:1234 -v "$PWD:/workspace" vmrt-workspace:test sh -c \
+            "pip install --user --quiet --disable-pip-version-check --no-warn-script-location -r requirements/pytest_requirements.txt && python -m pytest -rs -p no:cacheprovider" \
+            | tee pytest_output.txt
+          if grep -qE '[0-9]+ skipped' pytest_output.txt; then
+            echo "::error::Some tests were skipped inside the image. Every test should run there."
+            exit 1
+          fi
 
       # Pull requests fail on a critical vulnerability that already has a fix. Published images are scanned in the
       # scan job instead, so a new finding never holds back the weekly base image security updates.

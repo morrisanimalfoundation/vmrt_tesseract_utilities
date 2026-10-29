@@ -373,13 +373,19 @@ rather than with `git add .`, so nothing extra is swept in.
   Run a single test with `pytest tests/pytests/string_replacer_test.py::test_replace_single_string`.
 - **Linting**: `./sort_and_lint.sh` runs `isort` and `flake8` (line length is not enforced). Install
   dependencies first with `pip install -r requirements/ci_requirements.txt`.
-- Both checks run automatically on every pull request to `main`.
+- Both checks run automatically on every pull request to `main`. Pull requests that change code, tests, or the
+  image also run the tests inside the image (see **Docker image** below), with the exact package versions the
+  pipeline uses. To do the same locally, run this from the repository folder:
+  ```bash
+  docker run --rm --user 1234:1234 -v "$PWD:/workspace" ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities:main sh -c "pip install --user -r requirements/pytest_requirements.txt && python -m pytest"
+  ```
 - **Docker image**: `./run.sh` downloads a prebuilt image from
   `ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities`. The image holds the tools and Python packages
   only; the code is mounted from your copy of the repository, so code changes never need a new image. The
   `Docker Image` workflow (`.github/workflows/docker_image.yaml`) rebuilds and publishes it when `Dockerfile`
   or the requirements change on `main`, and weekly (from scratch, with Debian's latest security fixes). Pull
-  requests that touch those files are built and checked with `tests/docker_smoke_test.py` but not published.
+  requests that touch those files, the code or the tests are built and checked with `tests/docker_smoke_test.py`
+  and the full test suite (which fails if any test is skipped) but not published.
   If you are changing `Dockerfile`, `requirements.in`, or `requirements.txt`, use `./run.sh --build` to build
   the image locally instead (a few minutes), and run the smoke test from the repository folder:
   ```bash
