@@ -19,7 +19,7 @@ catalogue==2.0.10
     #   spacy
     #   srsly
     #   thinc
-certifi==2024.12.14
+certifi==2026.10.18
     # via requests
 charset-normalizer==3.4.0
     # via requests
