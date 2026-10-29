@@ -14,7 +14,10 @@ from collections import Counter
 
 import pytest
 
-pytest.importorskip('presidio_analyzer', reason='The PII scrubber packages are only installed in the workspace image.')
+# Everything the scrubber's NLP engine loads, including the spaCy model it uses for tokenizing, so a partial local
+# install skips these tests instead of erroring.
+for module in ('presidio_analyzer', 'torch', 'transformers', 'spacy_huggingface_pipelines', 'en_core_web_sm'):
+    pytest.importorskip(module, reason='The PII scrubber packages are only installed in the workspace image.')
 
 from scripts.scrubbers import pii_scrubber  # noqa: E402
 
@@ -52,11 +55,10 @@ IDENTIFIERS = [
     '555-0142',
     '555-0187',
     '555-0163',
-    '094-012345',
-    '012345',
-    'Margaret',
+    '012345',  # The subject ID's digits, so this also covers 094-012345 and 094012345.
+    'Margaret',  # Also covers the email address, margaret.thompson@example.com.
     'Thompson',
-    'margaret.thompson@example.com',
+    'example.com',
     'Alan',
     'Whitaker',
     'Jennifer',
