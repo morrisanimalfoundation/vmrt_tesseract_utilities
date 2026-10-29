@@ -257,12 +257,21 @@ def save_visit_dates(parsed_args: argparse.Namespace):
 
         stdout_logger.info(f'Searching {len(results)} files for visit dates.')
         for row, subject_id in results:
-            files_to_check = [row.pii_scrubber_confidence_file]
-            if parsed_args.search_unstructured_text_dir:
+            files_to_check = []
+            if row.pii_scrubber_confidence_file:
+                files_to_check.append(row.pii_scrubber_confidence_file)
+            elif row.ocr_output_file:
                 files_to_check.append(row.ocr_output_file)
-            set_visit_dates_from_files(
-                files_to_check, session, subject_id, row.input_id, parsed_args
-            )
+            if all((
+                parsed_args.search_unstructured_text_dir,
+                row.ocr_output_file,
+                row.ocr_output_file not in files_to_check,
+            )):
+                files_to_check.append(row.ocr_output_file)
+            if files_to_check:
+                set_visit_dates_from_files(
+                    files_to_check, session, subject_id, row.input_id, parsed_args
+                )
         stdout_logger.info(f'Finished searching {len(results)} files for visit dates.')
 
 

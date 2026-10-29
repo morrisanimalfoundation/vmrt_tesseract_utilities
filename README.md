@@ -220,8 +220,8 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
   removed. The default `0.0` removes everything the model flags.
 - `--visit-date-threshold` (step 5) is how many days apart a date in the text and a known visit date can be
   and still count as a match. The default is 3.
-- `--search-unstructured-text-dir` (step 5) also searches the raw OCR text for dates, not only the PII
-  scrubber's report.
+- `--search-unstructured-text-dir` (step 5) also searches the raw OCR text for dates when a PII scrubber
+  report exists. If the report does not exist, the miner automatically falls back to the raw OCR text.
 
 `scripts/scrubbers/scrub_txt_files.sh /workspace/output` is an alternative way to run step 4. It installs
 any spaCy models listed in `scripts/scrubbers/config/` first, then runs `pii_scrubber.py` with

@@ -1,6 +1,7 @@
 import argparse
 import csv
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.orm import Session
@@ -113,7 +114,18 @@ def test_set_visit_dates_from_files(mock_session, mocker):
     mock_session.add_all.assert_called_once()
 
 
-def test_save_visit_dates(mocker):
+@pytest.mark.parametrize(
+    'confidence_file, ocr_file, search_ocr, expected_files',
+    [
+        ('confidence.json', 'ocr.txt', False, ['confidence.json']),
+        (None, 'ocr.txt', False, ['ocr.txt']),
+        ('confidence.json', 'ocr.txt', True, ['confidence.json', 'ocr.txt']),
+        (None, None, True, None),
+    ],
+)
+def test_save_visit_dates(
+    mocker, confidence_file, ocr_file, search_ocr, expected_files
+):
     """
     Test the `save_visit_dates` function.
 
@@ -123,23 +135,45 @@ def test_save_visit_dates(mocker):
         Mocker fixture.
     """
     mock_parsed_args = argparse.Namespace(
-        debug_sql=False, search_unstructured_text_dir=False, chunk_size=22, offset=0
+        debug_sql=False,
+        search_unstructured_text_dir=search_ocr,
+        chunk_size=22,
+        offset=0,
     )
-    mock_session = mocker.MagicMock(spec=Session)
+    output = SimpleNamespace(
+        pii_scrubber_confidence_file=confidence_file,
+        ocr_output_file=ocr_file,
+        input_id=1,
+    )
+    mock_session_maker = mocker.MagicMock()
+    mock_session = mock_session_maker.begin.return_value.__enter__.return_value
+    query = mock_session.query.return_value
+    query = query.outerjoin.return_value
+    query = query.filter.return_value
+    query = query.offset.return_value
+    query = query.limit.return_value
+    query.all.return_value = [(output, 'test_subject_id')]
     mock_get_database_session = mocker.patch(
         'scripts.metadata_miners.visit_date_miner.get_database_session',
-        return_value=mocker.MagicMock(begin=mocker.MagicMock(return_value=mock_session)),
+        return_value=mock_session_maker,
     )
-    mock_session.query().outerjoin().all.return_value = [
-        ('test_file.txt', 'test_subject_id')
-    ]
-    mocker.patch(
+    mock_set_visit_dates = mocker.patch(
         'scripts.metadata_miners.visit_date_miner.set_visit_dates_from_files'
     )
 
     save_visit_dates(mock_parsed_args)
 
     mock_get_database_session.assert_called_once_with(echo=False)
+    if expected_files is None:
+        mock_set_visit_dates.assert_not_called()
+    else:
+        mock_set_visit_dates.assert_called_once_with(
+            expected_files,
+            mock_session,
+            'test_subject_id',
+            1,
+            mock_parsed_args,
+        )
 
 
 @pytest.mark.parametrize(
