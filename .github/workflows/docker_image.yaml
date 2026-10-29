@@ -94,6 +94,8 @@ jobs:
       # Runs the unit tests against the exact package versions in the image, including the tests that need
       # Tesseract or the PII scrubber's models. Every test must run here, so the step fails if any is skipped.
       - name: Unit tests
+        # Unlike the default shell, `shell: bash` sets pipefail, so a pytest failure isn't hidden by tee.
+        shell: bash
         run: |
           docker run --rm --user 1234:1234 -v "$PWD:/workspace" vmrt-workspace:test sh -c \
             "pip install --user --quiet --disable-pip-version-check --no-warn-script-location -r requirements/pytest_requirements.txt && python -m pytest -rs -p no:cacheprovider" \

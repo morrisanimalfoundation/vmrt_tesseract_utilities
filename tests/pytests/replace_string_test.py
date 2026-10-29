@@ -56,17 +56,19 @@ def test_read_target_strings_tsv():
         assert result == ["string1", "string2"]
 
 
-def test_process_file():
+def test_process_file(tmp_path, monkeypatch):
     """
     Test the `process_file` function.
 
     This test mocks the `open` function to simulate reading and writing files,
     and verifies that the `process_file` function correctly processes the file
-    and updates the `output_log` object.
+    and updates the `output_log` object. It runs in a temporary directory because
+    `process_file` creates the output directory for real.
 
     Asserts:
         The `list_replacement_output_file` attribute of the result matches the expected output file path.
     """
+    monkeypatch.chdir(tmp_path)
     output_log = MagicMock()
     output_log.ocr_output_file = "test.txt"
     output_log.list_replacement_output_file = None
