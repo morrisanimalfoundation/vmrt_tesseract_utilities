@@ -1,11 +1,12 @@
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "vmrt_tesseract_utilities"
 version = "1.0"
 description = "A utility script for extracting text and scrubbing PII from EMR data."
+license = "Apache-2.0"
 authors = [
   {name = "Morris Animal Foundation", email = "information-systems@morrisanimalfoundation.org"},
 ]
