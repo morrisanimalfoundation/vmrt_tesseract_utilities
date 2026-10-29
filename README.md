@@ -26,6 +26,7 @@ Goals:
 - [Troubleshooting](#troubleshooting)
 - [Working with git](#working-with-git)
 - [Development](#development)
+- [License](#license)
 
 ## How it works
 
@@ -383,6 +384,12 @@ rather than with `git add .`, so nothing extra is swept in.
   ```bash
   docker run --rm --user 1234:1234 -v "$PWD:/workspace" ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities:main python tests/docker_smoke_test.py
   ```
+  Each published image is tagged `main` and `sha-<commit>` (the first 7 characters of the commit it was built
+  from). Use a `sha-` tag when you need exactly the same image every time. To check that an image was built by
+  this repository's workflow, run:
+  ```bash
+  gh attestation verify oci://ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities:main -R morrisanimalfoundation/vmrt_tesseract_utilities
+  ```
 - **Dependencies**: `requirements.ini` lists the direct dependencies and `requirements.txt` is generated from
   it, so don't edit `requirements.txt` by hand. To regenerate it, run this from the repository folder, outside
   the container (it uses the same Python version as the Docker image):
@@ -392,3 +399,7 @@ rather than with `git add .`, so nothing extra is swept in.
   Existing pins are kept; add `--upgrade` only when you mean to update them. Keep `presidio_analyzer[transformers]`
   and `torch` in `requirements.ini` (the PII scrubber needs them) and keep the CPU-only PyTorch index line at the
   top, which stops `torch` from pulling in several GB of CUDA libraries.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).
