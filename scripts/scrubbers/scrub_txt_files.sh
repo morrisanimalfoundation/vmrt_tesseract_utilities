@@ -19,9 +19,10 @@ fi
 chmod +x "${SCRIPT_DIR}/install_spacy_models.sh"
 /bin/bash "${SCRIPT_DIR}/install_spacy_models.sh"
 
+# No --threshold, so every detection is removed (the default, 0.0). The model scores some identifiers, such as
+# GRLS subject IDs, ZIP codes and house numbers, around 0.4, so a higher threshold leaves them in the text.
 python "${SCRIPT_DIR}/pii_scrubber.py" \
       "$OUTPUT_DIR" \
-      --config="${SCRIPT_DIR}/config/stanford-deidentifier-base_nlp.yaml" \
-      --threshold=0.45
+      --config="${SCRIPT_DIR}/config/stanford-deidentifier-base_nlp.yaml"
 
 echo "All files processed."
