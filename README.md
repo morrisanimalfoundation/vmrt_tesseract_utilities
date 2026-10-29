@@ -375,9 +375,10 @@ rather than with `git add .`, so nothing extra is swept in.
   dependencies first with `pip install -r requirements/ci_requirements.txt`.
 - Both checks run automatically on every pull request to `main`. Pull requests that change code, tests, or the
   image also run the tests inside the image (see **Docker image** below), with the exact package versions the
-  pipeline uses. To do the same locally, run this from the repository folder:
+  pipeline uses. To do the same locally, run this from the repository folder (after `./run.sh --build`, it uses
+  your local build, which has the same name):
   ```bash
-  docker run --rm --user 1234:1234 -v "$PWD:/workspace" ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities:main sh -c "pip install --user -r requirements/pytest_requirements.txt && python -m pytest"
+  docker run --rm --user 1234:1234 -v "$PWD:/workspace" ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities:main sh -c "pip install --user -r requirements/pytest_requirements.txt && python -m pytest -p no:cacheprovider"
   ```
 - **Docker image**: `./run.sh` downloads a prebuilt image from
   `ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities`. The image holds the tools and Python packages

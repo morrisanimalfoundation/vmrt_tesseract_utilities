@@ -91,9 +91,12 @@ jobs:
       - name: Smoke test
         run: docker run --rm --user 1234:1234 -v "$PWD:/workspace" vmrt-workspace:test python tests/docker_smoke_test.py
 
-      # Runs the unit tests against the exact package versions in the image, including the tests that need
-      # Tesseract or the PII scrubber's models. Every test must run here, so the step fails if any is skipped.
+      # Runs the unit tests against the exact package versions in the image, so tests that need packages only
+      # installed there (such as the PII scrubber's) run too. Every test must run here, so the step fails if any
+      # is skipped. On the weekly run a failure is reported but doesn't block publishing, so the base image
+      # security updates still go out; the tests already passed on the pull request that changed the code.
       - name: Unit tests
+        continue-on-error: ${{ github.event_name == 'schedule' }}
         # Unlike the default shell, `shell: bash` sets pipefail, so a pytest failure isn't hidden by tee.
         shell: bash
         run: |
