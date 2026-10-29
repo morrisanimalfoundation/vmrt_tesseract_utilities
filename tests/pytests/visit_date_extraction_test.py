@@ -24,6 +24,25 @@ def mock_session(mocker):
     return mock_session
 
 
+def saved_date_pairs(mock_session):
+    """
+    Returns the metadata rows passed to the mock session's `add_all`, as sorted tuples.
+
+    Parameters
+    ----------
+    mock_session : mocker.MagicMock
+        Mock SQLAlchemy session.
+
+    Returns
+    -------
+    list of tuple
+        (subject_id, input_id, visit_date, extracted_date) for each row.
+    """
+    mock_session.add_all.assert_called_once()
+    rows = mock_session.add_all.call_args.args[0]
+    return sorted((row.subject_id, row.input_id, row.visit_date, row.extracted_date) for row in rows)
+
+
 @pytest.mark.parametrize(
     'extracted_dates, visit_dates, days, expected_pairs',
     [
@@ -110,7 +129,86 @@ def test_set_visit_dates_from_files(mock_session, mocker):
         ['test_file.txt'], mock_session, 'test_subject', 1, mock_parsed_args
     )
 
-    mock_session.add_all.assert_called_once()
+    # Only 2024-01-20 is within 3 days of a visit (2024-01-19).
+    assert saved_date_pairs(mock_session) == [('test_subject', 1, datetime(2024, 1, 19), datetime(2024, 1, 20))]
+
+
+def test_set_visit_dates_from_files_skips_existing_pairs(mock_session, mocker):
+    """
+    Test that `set_visit_dates_from_files` doesn't save a date pair the database already has.
+
+    Parameters
+    ----------
+    mock_session : mocker.MagicMock
+        Mock SQLAlchemy session.
+    mocker : pytest_mock.plugin.MockerFixture
+        Mocker fixture.
+    """
+    mock_parsed_args = argparse.Namespace(
+        visit_date_tsv='test_visit_dates.tsv',
+        dog_profile_tsv='test_dog_profile.tsv',
+        visit_date_threshold=3,
+    )
+    mocker.patch(
+        'scripts.metadata_miners.visit_date_miner.get_dates_from_tsv',
+        side_effect=[
+            [datetime(2024, 1, 10), datetime(2024, 1, 19)],  # visit dates
+            [datetime(2024, 1, 1)],  # birthdate
+            [],  # death date
+        ],
+    )
+    mocker.patch(
+        'scripts.metadata_miners.visit_date_miner.DateExtractor.extract_dates_from_file',
+        return_value=[datetime(2024, 1, 11), datetime(2024, 1, 20)],
+    )
+    mocker.patch(
+        'scripts.metadata_miners.visit_date_miner.get_existing_date_pairs',
+        return_value={(datetime(2024, 1, 19), datetime(2024, 1, 20))},
+    )
+
+    set_visit_dates_from_files(
+        ['test_file.txt'], mock_session, 'test_subject', 1, mock_parsed_args
+    )
+
+    assert saved_date_pairs(mock_session) == [('test_subject', 1, datetime(2024, 1, 10), datetime(2024, 1, 11))]
+
+
+def test_set_visit_dates_from_files_ignores_dates_outside_dogs_life(mock_session, mocker, tmp_path):
+    """
+    Test that dates in the text from before the dog's birth or after its death are not matched to visits.
+
+    The text file is read for real, so this checks that the birth and death dates reach the date extractor.
+
+    Parameters
+    ----------
+    mock_session : mocker.MagicMock
+        Mock SQLAlchemy session.
+    mocker : pytest_mock.plugin.MockerFixture
+        Mocker fixture.
+    tmp_path : pathlib.Path
+        Temporary directory for the text file.
+    """
+    text_file = tmp_path / 'record.txt'
+    text_file.write_text('Seen on 2012-05-01.\nSeen on 2016-05-01.\nSeen on 2020-05-01.\n')
+    mock_parsed_args = argparse.Namespace(
+        visit_date_tsv='test_visit_dates.tsv',
+        dog_profile_tsv='test_dog_profile.tsv',
+        visit_date_threshold=3,
+    )
+    mocker.patch(
+        'scripts.metadata_miners.visit_date_miner.get_dates_from_tsv',
+        side_effect=[
+            [datetime(2012, 5, 1), datetime(2016, 5, 1), datetime(2020, 5, 1)],  # visit dates
+            [datetime(2014, 1, 1)],  # birthdate
+            [datetime(2019, 1, 1)],  # death date
+        ],
+    )
+
+    set_visit_dates_from_files(
+        [str(text_file)], mock_session, 'test_subject', 1, mock_parsed_args
+    )
+
+    assert saved_date_pairs(mock_session) == [('test_subject', 1, datetime(2016, 5, 1), datetime(2016, 5, 1))]
 
 
 def test_save_visit_dates(mocker):
