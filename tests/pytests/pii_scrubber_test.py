@@ -80,9 +80,11 @@ MEDICAL_TEXT = [
     'Recheck in 6 months',
 ]
 
-# Detections per entity type in RECORD, recorded with the package and model versions in the image. Low-scoring
-# types that only fire on parts of other entities (URL inside the email address, US_SSN and US_DRIVER_LICENSE on
-# the subject ID) are left out because they are noise, not what we rely on.
+# Detections per entity type in RECORD, recorded with the package versions in requirements.txt and revision
+# 661b9c1c717d3165512d440abc3700c386aefab6 of the StanfordAIMI/stanford-deidentifier-base model, which the image
+# doesn't pin yet: a new model revision on Hugging Face can change these. Low-scoring types that only fire on parts
+# of other entities (URL inside the email address, US_SSN and US_DRIVER_LICENSE on the subject ID) are left out
+# because they are noise, not what we rely on.
 BASELINE_COUNTS = {
     'PERSON': 6,
     'PHONE_NUMBER': 5,
