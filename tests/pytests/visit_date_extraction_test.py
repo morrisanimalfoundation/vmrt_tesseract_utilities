@@ -121,6 +121,9 @@ def test_set_visit_dates_from_files(mock_session, mocker):
         (None, 'ocr.txt', False, ['ocr.txt']),
         ('confidence.json', 'ocr.txt', True, ['confidence.json', 'ocr.txt']),
         (None, None, True, None),
+        (None, 'ocr.txt', True, ['ocr.txt']),
+        ('confidence.json', None, True, ['confidence.json']),
+        (None, None, False, None),
     ],
 )
 def test_save_visit_dates(
