@@ -104,6 +104,11 @@ jobs:
     needs: build
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    # Publish runs (pushes to main, the weekly rebuild, manual runs) wait for each other, so one can't move :main
+    # while another is still publishing.
+    concurrency:
+      group: docker-image-publish
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
@@ -124,28 +129,36 @@ jobs:
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - name: Create and push the multi-platform tags
+      # The index is pushed under its sha-<commit> tag and attested before :main moves to it, so :main never
+      # points at an image without provenance.
+      - name: Create and push the multi-platform image
+        id: index
         working-directory: ${{ runner.temp }}/digests
         run: |
           sources=()
           for digest in *; do sources+=("$IMAGE@sha256:$digest"); done
           docker buildx imagetools create \
-            --tag "$IMAGE:main" \
+            --metadata-file "$RUNNER_TEMP/index-metadata.json" \
             --tag "$IMAGE:sha-${GITHUB_SHA::7}" \
             --annotation "index:org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
             --annotation "index:org.opencontainers.image.description=VMRT Tesseract Utilities workspace image" \
             "${sources[@]}"
-
-      - name: Inspect
-        id: inspect
-        run: |
-          docker buildx imagetools inspect "$IMAGE:main"
-          echo "digest=$(docker buildx imagetools inspect "$IMAGE:main" --format '{{.Manifest.Digest}}')" >> "$GITHUB_OUTPUT"
+          digest=$(jq -r '."containerimage.descriptor".digest' "$RUNNER_TEMP/index-metadata.json")
+          if [[ $digest != sha256:* ]]; then
+            echo "::error::Could not read the image index digest (got '$digest')."
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       # Lets anyone check an image came from this workflow: gh attestation verify oci://<image> -R <this repo>
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE }}
-          subject-digest: ${{ steps.inspect.outputs.digest }}
+          subject-digest: ${{ steps.index.outputs.digest }}
           push-to-registry: true
+
+      - name: Point main at the attested image
+        run: |
+          docker buildx imagetools create --tag "$IMAGE:main" "$IMAGE@${{ steps.index.outputs.digest }}"
+          docker buildx imagetools inspect "$IMAGE:main"
