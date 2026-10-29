@@ -21,7 +21,7 @@ RUN apt-get update -y && \
       | sha256sum -c -
 COPY requirements.txt .
 # The import check fails the build if the PII scrubber's dependencies are ever dropped from requirements.txt.
-RUN pip install -r requirements.txt --trusted-host pypi.python.org &&\
+RUN pip install -r requirements.txt &&\
     python -c "import torch, transformers, spacy_huggingface_pipelines" && \
     python -m spacy download en_core_web_sm && \
     python -m spacy download en_core_web_lg
