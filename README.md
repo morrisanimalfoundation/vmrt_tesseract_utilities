@@ -394,11 +394,14 @@ rather than with `git add .`, so nothing extra is swept in.
   it, so don't edit `requirements.txt` by hand. To regenerate it, run this from the repository folder, outside
   the container (it uses the same Python version as the Docker image):
   ```bash
-  docker run --rm -v "$PWD:/src" -w /src python:3.11 sh -c "pip install -q pip-tools && pip-compile requirements.ini"
+  docker run --rm -v "$PWD:/src" -w /src python:3.11 sh -c "pip install -q pip-tools==7.6.2 && pip-compile --strip-extras requirements.ini"
   ```
   Existing pins are kept; add `--upgrade` only when you mean to update them. Keep `presidio_analyzer[transformers]`
   and `torch` in `requirements.ini` (the PII scrubber needs them) and keep the CPU-only PyTorch index line at the
-  top, which stops `torch` from pulling in several GB of CUDA libraries.
+  top, which stops `torch` from pulling in several GB of CUDA libraries. The `Requirements Check` workflow fails
+  a pull request if `requirements.txt` is out of date with `requirements.ini`.
+  `requirements/pytest_requirements.txt` pins only the test tools and takes every other version from
+  `requirements.txt`, so a version change there applies to the tests too.
 
 ## License
 

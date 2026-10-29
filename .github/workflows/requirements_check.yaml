@@ -1,0 +1,43 @@
+# Fails if requirements.txt is out of date with requirements.ini, for example after editing requirements.ini
+# without regenerating requirements.txt (see "Dependencies" in the README).
+name: Requirements Check
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - requirements.ini
+      - requirements.txt
+      - requirements/**
+      - .github/workflows/requirements_check.yaml
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - requirements.ini
+      - requirements.txt
+      - requirements/**
+      - .github/workflows/requirements_check.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Regenerate requirements.txt
+        run: |
+          pip install pip-tools==7.6.2
+          pip-compile -q --strip-extras requirements.ini
+
+      - name: Check for differences
+        run: |
+          if ! git diff --exit-code requirements.txt; then
+            echo "::error file=requirements.txt::requirements.txt is out of date with requirements.ini. Regenerate it with the pip-compile command in the README."
+            exit 1
+          fi

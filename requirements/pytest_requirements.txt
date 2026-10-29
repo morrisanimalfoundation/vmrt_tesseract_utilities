@@ -1,5 +1,7 @@
+# Test-only packages are pinned here. Packages the image also uses take their versions from requirements.txt.
+-c ../requirements.txt
 pytest==8.3.4
 pytest-mock==3.14.0
-python-dateutil==2.9.0.post0
-python-dotenv==1.2.2
-SQLAlchemy==2.0.37
+python-dateutil
+python-dotenv
+SQLAlchemy

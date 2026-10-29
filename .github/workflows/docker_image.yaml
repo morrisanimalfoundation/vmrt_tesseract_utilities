@@ -9,6 +9,7 @@ on:
     branches: [ "main" ]
     paths:
       - Dockerfile
+      - requirements.ini
       - requirements.txt
       - tests/docker_smoke_test.py
       - .github/workflows/docker_image.yaml
@@ -16,6 +17,7 @@ on:
     branches: [ "main" ]
     paths:
       - Dockerfile
+      - requirements.ini
       - requirements.txt
       - tests/docker_smoke_test.py
       - .github/workflows/docker_image.yaml
