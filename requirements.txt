@@ -10,7 +10,7 @@ annotated-doc==0.0.5
     # via typer-slim
 annotated-types==0.6.0
     # via pydantic
-azure-core==1.32.0
+azure-core==1.41.0
     # via presidio-anonymizer
 blis==1.3.3
     # via thinc
@@ -19,7 +19,7 @@ catalogue==2.0.10
     #   spacy
     #   srsly
     #   thinc
-certifi==2024.12.14
+certifi==2026.10.23
     # via requests
 charset-normalizer==3.4.0
     # via requests
@@ -36,7 +36,7 @@ cymem==2.0.13
     #   preshed
     #   spacy
     #   thinc
-filelock==3.16.1
+filelock==4.2.4
     # via
     #   huggingface-hub
     #   tldextract
@@ -55,11 +55,11 @@ huggingface-hub==0.36.2
     #   presidio-analyzer
     #   tokenizers
     #   transformers
-idna==3.7
+idna==3.20
     # via
     #   requests
     #   tldextract
-jinja2==3.1.5
+jinja2==3.1.6
     # via
     #   spacy
     #   torch
@@ -92,7 +92,7 @@ pdf2image==1.17.0
     # via -r requirements.ini
 phonenumbers==8.13.52
     # via presidio-analyzer
-pillow==10.3.0
+pillow==13.0.0
     # via pdf2image
 preshed==3.0.9
     # via
@@ -118,7 +118,7 @@ pymysql==1.1.1
     # via -r requirements.ini
 python-dateutil==2.9.0.post0
     # via -r requirements.ini
-python-dotenv==1.0.1
+python-dotenv==1.2.2
     # via -r requirements.ini
 pyyaml==6.0.2
     # via
@@ -129,7 +129,7 @@ regex==2024.11.6
     # via
     #   presidio-analyzer
     #   transformers
-requests==2.32.3
+requests==2.34.2
     # via
     #   azure-core
     #   huggingface-hub
@@ -143,9 +143,7 @@ requests-file==2.1.0
 safetensors==0.8.0
     # via transformers
 six==1.16.0
-    # via
-    #   azure-core
-    #   python-dateutil
+    # via python-dateutil
 smart-open==7.1.0
     # via weasel
 spacy==3.8.8
@@ -201,7 +199,7 @@ typing-extensions==4.11.0
     #   pydantic-core
     #   sqlalchemy
     #   torch
-urllib3==2.3.0
+urllib3==2.8.0
     # via requests
 wasabi==1.1.3
     # via
