@@ -16,8 +16,7 @@ import pytest
 
 pytest.importorskip('presidio_analyzer', reason='The PII scrubber packages are only installed in the workspace image.')
 
-from scripts.scrubbers.pii_scrubber import (create_nlp_engine,  # noqa: E402
-                                            scrub_pii)
+from scripts.scrubbers import pii_scrubber  # noqa: E402
 
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'scrubbers', 'config',
                            'stanford-deidentifier-base_nlp.yaml')
@@ -125,8 +124,8 @@ def scrubbed():
     tuple
         The scrubbed text and the list of Presidio results.
     """
-    analyzer = create_nlp_engine(CONFIG_FILE)
-    return scrub_pii(RECORD, analyzer, threshold=0.0)
+    analyzer = pii_scrubber.create_nlp_engine(CONFIG_FILE)
+    return pii_scrubber.scrub_pii(RECORD, analyzer, threshold=0.0)
 
 
 @pytest.mark.parametrize('identifier', IDENTIFIERS)
