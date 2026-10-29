@@ -7,7 +7,9 @@ ENV PIP_NO_CACHE_DIR=1
 # Only the English and orientation models are needed: the OCR code uses Tesseract's default language.
 # Cloning the whole tesseract-ocr/tessdata repository would add about 2 GB of other languages.
 ARG TESSDATA_COMMIT=ced78752cc61322fb554c280d13360b35b8684e4
+# The upgrade installs Debian security fixes released since the python:3.11 base image was last rebuilt.
 RUN apt-get update -y && \
+    apt-get -y upgrade && \
     apt-get -y install poppler-utils tesseract-ocr yq build-essential libopenblas-dev libomp-dev && \
     rm -rf /var/lib/apt/lists/* && \
     mkdir -p /usr/share/tessdata && \

@@ -9,7 +9,7 @@ on:
     branches: [ "main" ]
     paths:
       - Dockerfile
-      - requirements.ini
+      - requirements.in
       - requirements.txt
       - tests/docker_smoke_test.py
       - .github/workflows/docker_image.yaml
@@ -17,7 +17,7 @@ on:
     branches: [ "main" ]
     paths:
       - Dockerfile
-      - requirements.ini
+      - requirements.in
       - requirements.txt
       - tests/docker_smoke_test.py
       - .github/workflows/docker_image.yaml
@@ -28,6 +28,9 @@ on:
 env:
   IMAGE: ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities
   PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+  # Trivy runs from its container image, pinned by digest, rather than its GitHub Action, whose tags were
+  # hijacked in a 2026 supply-chain compromise. 0.69.3 predates it.
+  TRIVY_IMAGE: aquasec/trivy:0.69.3@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c
 
 permissions:
   contents: read
@@ -59,6 +62,9 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           pull: true
+          # The weekly run rebuilds from scratch so apt-get upgrade picks up new Debian security fixes even when
+          # the base image hasn't changed.
+          no-cache: ${{ github.event_name == 'schedule' }}
           load: true
           tags: vmrt-workspace:test
           cache-from: type=gha,scope=${{ env.PLATFORM_SLUG }}
@@ -66,6 +72,15 @@ jobs:
 
       - name: Smoke test
         run: docker run --rm --user 1234:1234 -v "$PWD:/workspace" vmrt-workspace:test python tests/docker_smoke_test.py
+
+      # Pull requests fail on a critical vulnerability that already has a fix. Published images are scanned in the
+      # scan job instead, so a new finding never holds back the weekly base image security updates.
+      - name: Vulnerability scan
+        if: github.event_name == 'pull_request'
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" image \
+            --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 --no-progress --timeout 30m \
+            vmrt-workspace:test
 
       - name: Log in to GitHub Container Registry
         if: env.PUBLISH == 'true'
@@ -116,6 +131,8 @@ jobs:
       packages: write
       id-token: write
       attestations: write
+    outputs:
+      digest: ${{ steps.index.outputs.digest }}
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -164,3 +181,25 @@ jobs:
         run: |
           docker buildx imagetools create --tag "$IMAGE:main" "$IMAGE@${{ steps.index.outputs.digest }}"
           docker buildx imagetools inspect "$IMAGE:main"
+
+  # Scans each published image and reports high and critical vulnerabilities that have a fix to the repository's
+  # Security > Code scanning tab, so new findings in :main (including from the weekly rebuild) show up there.
+  scan:
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Scan the published image
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$RUNNER_TEMP:/out" "$TRIVY_IMAGE" image \
+            --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --no-progress --timeout 30m \
+            --format sarif --output /out/trivy.sarif \
+            "$IMAGE@${{ needs.publish.outputs.digest }}"
+
+      - name: Upload to code scanning
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: ${{ runner.temp }}/trivy.sarif
+          category: container-image
