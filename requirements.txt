@@ -92,7 +92,7 @@ pdf2image==1.17.0
     # via -r requirements.ini
 phonenumbers==8.13.52
     # via presidio-analyzer
-pillow==10.3.0
+pillow==13.0.0
     # via pdf2image
 preshed==3.0.9
     # via
