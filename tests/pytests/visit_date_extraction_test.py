@@ -3,11 +3,14 @@ import csv
 from datetime import datetime
 
 import pytest
-from sqlalchemy.orm import Session
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
 
 from scripts.metadata_miners.visit_date_miner import (
     get_date_pairs_within_days, get_dates_from_tsv, get_values_from_tsv,
     save_visit_dates, set_visit_dates_from_files)
+from vmrt_tesseract_utilities.database import (Base, TranscriptionInput,
+                                               TranscriptionMetadata)
 
 
 @pytest.fixture
@@ -171,6 +174,59 @@ def test_set_visit_dates_from_files_skips_existing_pairs(mock_session, mocker):
     )
 
     assert saved_date_pairs(mock_session) == [('test_subject', 1, datetime(2024, 1, 10), datetime(2024, 1, 11))]
+
+
+def test_set_visit_dates_from_files_saves_each_pair_once_per_input(mocker, tmp_path):
+    """
+    Test on a real database that rerunning saves no duplicate date pairs, and that another input can still save them.
+
+    The registration step's empty metadata row should be filled in rather than left behind.
+
+    Parameters
+    ----------
+    mocker : pytest_mock.plugin.MockerFixture
+        Mocker fixture.
+    tmp_path : pathlib.Path
+        Temporary directory for the text file.
+    """
+    text_file = tmp_path / 'record.txt'
+    text_file.write_text('Seen on 2024-01-11.\nSeen on 2024-01-20.\n')
+    mock_parsed_args = argparse.Namespace(
+        visit_date_tsv='test_visit_dates.tsv',
+        dog_profile_tsv='test_dog_profile.tsv',
+        visit_date_threshold=3,
+    )
+    dates_by_column = {
+        'visit_date': [datetime(2024, 1, 10), datetime(2024, 1, 19)],
+        'birth_date': [datetime(2020, 1, 1)],
+    }
+    mocker.patch(
+        'scripts.metadata_miners.visit_date_miner.get_dates_from_tsv',
+        side_effect=lambda tsv, subject_id, column: dates_by_column.get(column, []),
+    )
+    engine = create_engine('sqlite:///:memory:')
+    Base.metadata.create_all(engine)
+    expected_pairs = [
+        (datetime(2024, 1, 10), datetime(2024, 1, 11)),
+        (datetime(2024, 1, 19), datetime(2024, 1, 20)),
+    ]
+
+    with sessionmaker(bind=engine).begin() as session:
+        first_input = TranscriptionInput(input_file='first.pdf', document_type='document')
+        second_input = TranscriptionInput(input_file='second.pdf', document_type='document')
+        session.add_all([first_input, second_input])
+        session.add(TranscriptionMetadata(subject_id='test_subject', transcription_input=first_input))
+        session.flush()
+
+        for _ in range(2):
+            set_visit_dates_from_files([str(text_file)], session, 'test_subject', first_input.id, mock_parsed_args)
+            session.flush()
+        set_visit_dates_from_files([str(text_file)], session, 'test_subject', second_input.id, mock_parsed_args)
+        session.flush()
+
+        for input_id in (first_input.id, second_input.id):
+            rows = session.query(TranscriptionMetadata).filter_by(input_id=input_id).all()
+            assert sorted((row.visit_date, row.extracted_date) for row in rows) == expected_pairs
 
 
 def test_set_visit_dates_from_files_ignores_dates_outside_dogs_life(mock_session, mocker, tmp_path):

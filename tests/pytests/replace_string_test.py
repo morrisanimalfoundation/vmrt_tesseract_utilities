@@ -56,36 +56,30 @@ def test_read_target_strings_tsv():
         assert result == ["string1", "string2"]
 
 
-def test_process_file(tmp_path, monkeypatch):
+def test_process_file(tmp_path):
     """
-    Test the `process_file` function.
-
-    This test mocks the `open` function to simulate reading and writing files,
-    and verifies that the `process_file` function correctly processes the file
-    and updates the `output_log` object. It runs in a temporary directory because
-    `process_file` creates the output directory for real.
+    Test the `process_file` function on real files in a temporary directory.
 
     Asserts:
         The `list_replacement_output_file` attribute of the result matches the expected output file path,
         and the text written there has every occurrence of the target replaced, whatever its case.
     """
-    monkeypatch.chdir(tmp_path)
+    input_file = tmp_path / "test.txt"
+    input_file.write_text("This is a text blob with old_string and OLD_STRING.")
     output_log = MagicMock()
-    output_log.ocr_output_file = "test.txt"
+    output_log.ocr_output_file = str(input_file)
     output_log.list_replacement_output_file = None
     strings_to_replace = ["old_string"]
     parsed_args = MagicMock()
     parsed_args.replacement_string = "new_string"
-    parsed_args.output_dir = "output"
+    parsed_args.output_dir = str(tmp_path)
     parsed_args.document_type = "document"
 
-    with patch("builtins.open", new_callable=MagicMock) as mock_open:
-        mock_file = mock_open.return_value.__enter__.return_value
-        mock_file.read.return_value = "This is a text blob with old_string and OLD_STRING."
-        result = process_file(output_log, strings_to_replace, parsed_args)
-        assert result.list_replacement_output_file == "output/list_replacement_output_file/document/test.txt"
-        mock_open.assert_any_call("output/list_replacement_output_file/document/test.txt", "w")
-        mock_file.write.assert_called_once_with("This is a text blob with new_string and new_string.")
+    result = process_file(output_log, strings_to_replace, parsed_args)
+
+    output_file = tmp_path / "list_replacement_output_file" / "document" / "test.txt"
+    assert result.list_replacement_output_file == str(output_file)
+    assert output_file.read_text() == "This is a text blob with new_string and new_string."
 
 
 def test_make_pass_hash_uses_effective_ordered_targets():
