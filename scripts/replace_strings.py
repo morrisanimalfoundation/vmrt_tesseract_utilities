@@ -208,22 +208,16 @@ def get_files_to_process(args: argparse.Namespace) -> list:
     with sessionmaker() as session:
         query = (session.query(TranscriptionOutput)
                  .outerjoin(TranscriptionInput.assets)
-                 .outerjoin(
-                        StringReplacementCompletion,
-                        and_(
-                            StringReplacementCompletion.output_id == TranscriptionOutput.id,
-                            StringReplacementCompletion.pass_id == args.replacement_pass_id,
-                        ),
-                    )
+                 .outerjoin(StringReplacementCompletion,
+                            and_(StringReplacementCompletion.output_id == TranscriptionOutput.id,
+                                 StringReplacementCompletion.pass_id == args.replacement_pass_id))
                  .where(TranscriptionInput.document_type == args.document_type)
                  .where(TranscriptionOutput.ocr_output_file != None)  # noqa: E711
                  .where(StringReplacementCompletion.id.is_(None))
                  .order_by(TranscriptionOutput.id)
-                 .limit(args.chunk_size)
-        )
+                 .limit(args.chunk_size))
         results = query.all()
     stdout_logger.info(f"Found {len(results)} files for this replacement pass.")
-    
     return results
 
 
@@ -316,8 +310,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("key_column", help="Name of the column in the CSV/TSV containing the keys.")
     parser.add_argument("replacement_string", help="The string to replace the keys with.")
     parser.add_argument("output_dir", help="Path to the output directory.")
-    parser.add_argument("--document_type", type=str, default="document", help="The document type we want to produce, document, page or block.")
-    parser.add_argument("--chunk_size", type=int, default=1000, help="The number of records to process.")
+    parser.add_argument("--document-type", type=str, default="document", help="The document type we want to produce, document, page or block.")
+    parser.add_argument("--chunk-size", type=int, default=1000, help="The number of records to process.")
     # parser.add_argument("--offset", type=int, default=0, help="The number of records to skip before beginning processing.")
     parser.add_argument("--debug-sql", action="store_true", help="Enable SQL debugging")
     parser.add_argument("--no-multiprocessing", action="store_true", help="Disable multiprocessing for debugging")

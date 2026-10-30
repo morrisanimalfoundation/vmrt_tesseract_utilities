@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from dotenv import load_dotenv
 from sqlalchemy import (DateTime, Float, ForeignKey, Integer, String,
-                        create_engine, func, UniqueConstraint)
+                        UniqueConstraint, create_engine, func)
 from sqlalchemy.orm import (DeclarativeBase, Mapped, mapped_column,
                             relationship, sessionmaker)
 
@@ -30,7 +30,7 @@ class TranscriptionInput(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     document_type: Mapped[str] = mapped_column(String(30))
     created: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, server_default=func.now())
-    input_file: Mapped[Optional[str]] = mapped_column(String(1024))
+    input_file: Mapped[Optional[str]] = mapped_column(String(255))
     assets: Mapped[List['TranscriptionOutput']] = relationship(
         back_populates='transcription_input', cascade='all, delete-orphan'
     )

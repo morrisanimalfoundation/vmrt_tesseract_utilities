@@ -4,11 +4,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from scripts import create_transcription_process
-from vmrt_tesseract_utilities.database import (
-    Base,
-    TranscriptionInput,
-    TranscriptionMetadata,
-)
+from vmrt_tesseract_utilities.database import (Base, TranscriptionInput,
+                                               TranscriptionMetadata)
 
 
 def test_registration_skips_already_registered_files(tmp_path, monkeypatch):

@@ -1,19 +1,16 @@
+from argparse import Namespace
 from unittest.mock import MagicMock, patch
 
-from argparse import Namespace
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from scripts.replace_strings import (process_file, read_target_strings, get_files_to_process,
-                                     make_pass_hash, scrub_and_write_files, get_or_create_pass)
-from vmrt_tesseract_utilities.database import (
-    Base,
-    StringReplacementCompletion,
-    StringReplacementPass,
-    TranscriptionInput,
-    TranscriptionOutput,
-)
+from scripts.replace_strings import (get_files_to_process, get_or_create_pass,
+                                     make_pass_hash, process_file,
+                                     read_target_strings,
+                                     scrub_and_write_files)
+from vmrt_tesseract_utilities.database import (Base, TranscriptionInput,
+                                               TranscriptionOutput)
 
 """
 Tests for the `replace_strings` script.
@@ -112,7 +109,6 @@ def test_make_pass_hash_uses_effective_ordered_targets():
     assert first_hash != reordered_hash
 
 
-
 def test_replacement_pass_skips_same_pass_and_processes_different_pass(tmp_path, monkeypatch):
     """
     Tests that completed outputs are skipped for the same pass and selected
@@ -165,12 +161,7 @@ def test_replacement_pass_skips_same_pass_and_processes_different_pass(tmp_path,
 
     scrub_and_write_files(first_batch, first_targets, args, use_multiprocessing=False)
 
-    replacement_file = (
-        tmp_path
-        / "list_replacement_output_file"
-        / "document"
-        / "ocr.txt"
-    )
+    replacement_file = tmp_path / "list_replacement_output_file" / "document" / "ocr.txt"
     first_result = replacement_file.read_text()
     assert first_result == "<NAME> <NAME>well"
 
