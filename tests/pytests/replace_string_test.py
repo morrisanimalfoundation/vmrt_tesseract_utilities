@@ -112,7 +112,6 @@ def test_make_pass_hash_uses_effective_ordered_targets():
     assert first_hash != reordered_hash
 
 
-
 def test_replacement_pass_skips_same_pass_and_processes_different_pass(tmp_path, monkeypatch):
     """
     Tests that completed outputs are skipped for the same pass and selected
