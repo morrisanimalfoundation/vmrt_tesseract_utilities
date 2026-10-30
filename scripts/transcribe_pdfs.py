@@ -3,6 +3,8 @@ import os
 import sys
 from typing import LiteralString
 
+from sqlalchemy import func
+
 from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                TranscriptionOutput,
@@ -78,7 +80,8 @@ def run_tesseract(args: argparse.Namespace) -> None:
     with sessionmaker.begin() as session:
         query = (session.query(TranscriptionInput, TranscriptionOutput)
                  .outerjoin(TranscriptionInput.assets)
-                 .where(TranscriptionInput.input_file.like('%.pdf'))
+                 # input_file has a case-sensitive collation, and file extensions can be in any case.
+                 .where(func.lower(TranscriptionInput.input_file).like('%.pdf'))
                  .where(TranscriptionInput.document_type == args.document_type)
                  .where(TranscriptionOutput.ocr_output_file == None)  # noqa: E711
                  .limit(args.chunk_size)
