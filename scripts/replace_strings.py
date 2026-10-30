@@ -219,7 +219,6 @@ def get_files_to_process(args: argparse.Namespace) -> list:
         )
         results = query.all()
     stdout_logger.info(f"Found {len(results)} files for this replacement pass.")
-    
     return results
 
 
