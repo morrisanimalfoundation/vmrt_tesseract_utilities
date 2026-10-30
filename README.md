@@ -207,7 +207,7 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 | --- | --- | --- | --- | --- | --- |
 | `create_transcription_process.py` | `--document-type` | — | — | `--debug-sql` | |
 | `transcribe_pdfs.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | |
-| `replace_strings.py` | `--document_type` | `--chunk_size` | `-` | `--debug-sql` | `--max-workers`, `--no-multiprocessing` |
+| `replace_strings.py` | `--document-type` | `--chunk-size` | — | `--debug-sql` | `--max-workers`, `--no-multiprocessing` |
 | `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config` |
 | `visit_date_miner.py` | — | `--chunk-size` | `--offset` | `--debug-sql` | `--visit-date-threshold`, `--search-unstructured-text-dir` |
 
