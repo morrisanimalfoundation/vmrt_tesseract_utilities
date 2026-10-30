@@ -41,7 +41,7 @@ def do_create_transcription_process(args: argparse.Namespace) -> None:
                 .all()
             )
         }
-        for subdir, dirs, files in os.walk(args.path_to_describe):
+        for subdir, dirs, files in os.walk(os.path.abspath(args.path_to_describe)):
             dog_match = re.search(DOG_ID_RE, subdir)
             if dog_match:
                 dog_id = dog_match.group(0)

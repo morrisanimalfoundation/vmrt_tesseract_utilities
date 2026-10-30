@@ -137,37 +137,24 @@ def scrub_and_write_files(process_filepath_data: List[object], strings_to_replac
     use_multiprocessing : bool
         Whether to use multiprocessing or not.
     """
-    session_maker = get_database_session(echo=parsed_args.debug_sql)
     batch_size = parsed_args.chunk_size
     success = True
     for i in range(0, len(process_filepath_data), batch_size):
         batch = process_filepath_data[i:i + batch_size]
-        with session_maker.begin() as session:
-            if use_multiprocessing:
-                with ProcessPoolExecutor(max_workers=parsed_args.max_workers) as executor:
-                    results = executor.map(process_file_wrapper, batch, [strings_to_replace] * len(batch), [parsed_args] * len(batch))
-                    for output_log in results:
-                        if output_log:
-                            session.add(output_log)
-                            session.add(StringReplacementCompletion(output_id=output_log.id, pass_id=parsed_args.replacement_pass_id))
-                        else:
-                            success = False
-            else:
-                for output_log in batch:
-                    result = process_file_wrapper(output_log, strings_to_replace, parsed_args)
-                    if result:
-                        session.add(result)
-                        session.add(StringReplacementCompletion(output_id=result.id, pass_id=parsed_args.replacement_pass_id))
-                    else:
-                        success = False
+        if use_multiprocessing:
+            with ProcessPoolExecutor(max_workers=parsed_args.max_workers) as executor:
+                results = list(executor.map(process_file_wrapper, batch, [strings_to_replace] * len(batch), [parsed_args] * len(batch)))
+        else:
+            results = [process_file_wrapper(output_log, strings_to_replace, parsed_args) for output_log in batch]
+        success = all(results) and success
     if not success:
         # If any files failed to process, exit with an error code.
         sys.exit(1)
 
 
-def process_file_wrapper(output_log: object, strings_to_replace: List[str], parsed_args: argparse.Namespace) -> Optional[object]:
+def process_file_wrapper(output_log: object, strings_to_replace: List[str], parsed_args: argparse.Namespace) -> bool:
     """
-    Processes one transcription output.
+    Processes one transcription output and records its completion in its own transaction.
 
     Parameters
     ----------
@@ -180,10 +167,16 @@ def process_file_wrapper(output_log: object, strings_to_replace: List[str], pars
 
     Returns
     -------
-    TranscriptionOutput
-        The updated file data object.
+    bool
+        Whether the file was processed successfully.
     """
-    return process_file(output_log, strings_to_replace, parsed_args)
+    session_maker = get_database_session(echo=parsed_args.debug_sql)
+    with session_maker.begin() as session:
+        session.add(output_log)
+        if process_file(output_log, strings_to_replace, parsed_args) is None:
+            return False
+        session.add(StringReplacementCompletion(output_id=output_log.id, pass_id=parsed_args.replacement_pass_id))
+    return True
 
 
 def get_files_to_process(args: argparse.Namespace) -> list:
