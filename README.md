@@ -176,6 +176,8 @@ The four arguments are, in order: the data file, the column to read values from,
 the output folder. You can run this step several times with different files or columns (for example, a list
 of dog names); each run builds on the previous one.
 
+The script records which files have completed each replacement pass. Re-running the same command skips completed files and selects the next batch; repeat it until no files remain. A different ordered target list or replacement string starts a new pass. Complete all replacement passes before step 4; a later pass does not automatically rerun PII scrubbing for files already scrubbed.
+
 **4. Scrub PII** — uses an NLP model to find and remove names, addresses, phone numbers, and similar. The
 first time you run this in a session it downloads the model, which needs an internet connection.
 
@@ -203,7 +205,7 @@ spelling in this table:
 | --- | --- | --- | --- | --- | --- |
 | `create_transcription_process.py` | `--document-type` | — | — | `--debug-sql` | |
 | `transcribe_pdfs.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | |
-| `replace_strings.py` | `--document_type` | `--chunk_size` | `--offset` | `--debug-sql` | `--max-workers`, `--no-multiprocessing` |
+| `replace_strings.py` | `--document_type` | `--chunk_size` | `-` | `--debug-sql` | `--max-workers`, `--no-multiprocessing` |
 | `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config` |
 | `visit_date_miner.py` | — | `--chunk_size` | `--offset` | `--debug_sql` | `--visit_date_threshold`, `--search_unstructured_text_dir` |
 
@@ -211,8 +213,7 @@ spelling in this table:
   is split: one text file per PDF, one per page, or one per detected line of text. Whatever you choose in
   step 1 must be passed to steps 2, 3, and 4 as well, or those steps will find nothing to do.
 - **Batch size** defaults to 1000 files per run in steps 2, 3, and 4. If you have more than 1000 files,
-  re-run steps 2 and 4 until they stop finding files (step 2 prints `Found 0 files to transcribe`). Step 3 does not skip files it has already
-  handled, so use `--offset` there instead (`--offset 1000`, then `--offset 2000`, and so on).
+  re-run steps 2 and 4 until they stop finding files (step 2 prints `Found 0 files to transcribe`). Step 3 skips files already completed for that replacement pass, so rerun the same command to process the next batch; no `--offset` is needed.
 - `--threshold` (step 4) is the minimum confidence score, from 0 to 1, a detection needs before it is
   removed. The default `0.0` removes everything the model flags.
 - `--visit_date_threshold` (step 5) is how many days apart a date in the text and a known visit date can be
