@@ -378,7 +378,7 @@ rather than with `git add .`, so nothing extra is swept in.
   pipeline uses. To do the same locally, run this from the repository folder (after `./run.sh --build`, it uses
   your local build, which has the same name):
   ```bash
-  docker run --rm --user 1234:1234 -v "$PWD:/workspace" ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities:main sh -c "pip install --user -r requirements/pytest_requirements.txt && python -m pytest -p no:cacheprovider"
+  docker run --rm --user 1234:1234 -v "$PWD:/workspace" ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities:main sh -c "pip install --user -r requirements/pytest_requirements.txt && python -m pytest -rs -p no:cacheprovider"
   ```
 - **Docker image**: `./run.sh` downloads a prebuilt image from
   `ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities`. The image holds the tools and Python packages
@@ -398,8 +398,8 @@ rather than with `git add .`, so nothing extra is swept in.
   ```bash
   gh attestation verify oci://ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities:main -R morrisanimalfoundation/vmrt_tesseract_utilities
   ```
-- **Security**: pull requests that change the image fail if it has a critical vulnerability with a fix
-  available. Every published image (amd64 and arm64) is scanned too, and its high and critical findings that
+- **Security**: pull requests that build the image, including code and test changes, fail if it has a critical
+  vulnerability with a fix available. Every published image (amd64 and arm64) is scanned too, and its high and critical findings that
   have a fix appear under the repository's **Security → Code scanning** tab. When a pinned Python package gets a known vulnerability
   with a fix, Dependabot opens a pull request that updates it in `requirements.in` and `requirements.txt`.
 - **Dependencies**: `requirements.in` lists the direct dependencies and `requirements.txt` is generated from
