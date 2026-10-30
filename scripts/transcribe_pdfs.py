@@ -11,7 +11,8 @@ from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                get_database_session)
 from vmrt_tesseract_utilities.logging import stdout_logger
 from vmrt_tesseract_utilities.tesseract_operations import (
-    TesseractOperationBlock, TesseractOperationDoc, TesseractOperationPage)
+    OcrSetupError, TesseractOperationBlock, TesseractOperationDoc,
+    TesseractOperationPage, check_ocr_setup)
 
 """
 Runs Tesseract on items stored in the input database.
@@ -60,15 +61,24 @@ def run_tesseract(args: argparse.Namespace) -> None:
     Notes
     -----
     The process is documented in the `process_output` table.
+    Each input's `ocr_status` is set to 'success' or 'failed', with the error saved in `ocr_error`.
+    Failed inputs are skipped on later runs unless `--retry-failed` is passed.
+    Setup problems that would fail every file stop the run before any file is touched.
 
     Parameters
     ----------
     args: argparse.Namespace
         The parsed args.
+
+    Raises
+    ------
+    OcrSetupError
+        If poppler or Tesseract isn't usable.
     """
     base_path = _get_and_create_output_directory(args)
     if args.document_type not in ('document', 'page', 'block',):
         raise ValueError("'--document-type' must be either 'document', 'page' or 'block'")
+    check_ocr_setup()
     stdout_logger.info(f'Here we go with document type: {args.document_type}')
     if args.document_type == 'document':
         op = TesseractOperationDoc()
@@ -83,14 +93,26 @@ def run_tesseract(args: argparse.Namespace) -> None:
                  # input_file has a case-sensitive collation, and file extensions can be in any case.
                  .where(func.lower(TranscriptionInput.input_file).like('%.pdf'))
                  .where(TranscriptionInput.document_type == args.document_type)
-                 .where(TranscriptionOutput.ocr_output_file == None)  # noqa: E711
-                 .limit(args.chunk_size)
-                 .offset(args.offset))
+                 .where(TranscriptionOutput.ocr_output_file == None))  # noqa: E711
+        if not args.retry_failed:
+            query = query.where(TranscriptionInput.ocr_status.is_distinct_from('failed'))
+        query = query.limit(args.chunk_size).offset(args.offset)
         count = query.count()
         stdout_logger.info(f'Found {count} files to transcribe.')
+        failures = []
         for db_input, db_output in query.all():
             db_output_logs = []
-            output = op.process_row(db_input.input_file)
+            try:
+                output = op.process_row(db_input.input_file)
+            except Exception as e:
+                error = f'{type(e).__name__}: {e}'
+                stdout_logger.error(f'Failed to transcribe {db_input.input_file}: {error}')
+                failures.append((db_input.input_file, error))
+                db_input.ocr_status = 'failed'
+                db_input.ocr_error = error
+                continue
+            db_input.ocr_status = 'success'
+            db_input.ocr_error = None
             for ocr_result in output:
                 bits = os.path.splitext(os.path.basename(db_input.input_file))
                 output_path = f'{base_path}/{bits[0]}-{ocr_result["page"]}-{ocr_result["block"]}.txt'
@@ -102,7 +124,25 @@ def run_tesseract(args: argparse.Namespace) -> None:
                 db_output.transcription_input = db_input
                 db_output_logs.append(db_output)
                 session.add_all(db_output_logs)
-    stdout_logger.info('All done!')
+    _log_run_summary(count, failures)
+
+
+def _log_run_summary(count: int, failures: list) -> None:
+    """
+    Logs how many files were transcribed and lists each failure.
+
+    Parameters
+    ----------
+    count: int
+      The number of files the run attempted.
+    failures: list
+      (input_file, error) tuples for the files that failed.
+    """
+    stdout_logger.info(f'All done! Transcribed {count - len(failures)} of {count} files.')
+    if failures:
+        stdout_logger.warning(f'{len(failures)} file(s) failed:')
+        for input_file, error in failures:
+            stdout_logger.warning(f'  {input_file}: {error}')
 
 
 def parse_args() -> argparse.Namespace:
@@ -123,10 +163,16 @@ def parse_args() -> argparse.Namespace:
                         help='The number of records to process.')
     parser.add_argument('--offset', type=int, default=0,
                         help='The number of records to skip before beginning processing.')
+    parser.add_argument('--retry-failed', action='store_true',
+                        help='Also process files that failed on an earlier run.')
     parser.add_argument('--debug-sql', action='store_true', help='Enable SQL debugging')
     return parser.parse_args(normalize_flag_spelling(sys.argv[1:]))
 
 
 if __name__ == '__main__':
     provided_args = parse_args()
-    run_tesseract(provided_args)
+    try:
+        run_tesseract(provided_args)
+    except OcrSetupError as e:
+        stdout_logger.error(f'Stopping before transcribing anything: {e}')
+        sys.exit(1)
