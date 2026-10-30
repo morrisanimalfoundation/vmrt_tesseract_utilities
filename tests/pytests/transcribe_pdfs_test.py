@@ -3,9 +3,8 @@
 import argparse
 
 import pytest
-from PIL import Image, ImageDraw
 from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from scripts import transcribe_pdfs
 from vmrt_tesseract_utilities.database import (
@@ -14,13 +13,37 @@ from vmrt_tesseract_utilities.database import (
 
 
 def _make_two_page_pdf(path):
-    """Use synthetic pages, never an actual veterinary record."""
-    pages = []
-    for page_number in (1, 2):
-        image = Image.new('RGB', (400, 200), 'white')
-        ImageDraw.Draw(image).text((15, 30), f'Synthetic page {page_number}', fill='black')
-        pages.append(image)
-    pages[0].save(path, 'PDF', save_all=True, append_images=pages[1:])
+    """Generate a valid two-page PDF using only Python's standard library."""
+    def stream(text):
+        content = f'BT /F1 20 Tf 25 125 Td ({text}) Tj ET\n'.encode('ascii')
+        return b'<< /Length %d >>\nstream\n' % len(content) + content + b'endstream'
+
+    objects = [
+        b'<< /Type /Catalog /Pages 2 0 R >>',
+        b'<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>',
+        b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 200] '
+        b'/Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>',
+        b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 200] '
+        b'/Resources << /Font << /F1 5 0 R >> >> /Contents 7 0 R >>',
+        b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+        stream('Synthetic page one'),
+        stream('Synthetic page two'),
+    ]
+    pdf = bytearray(b'%PDF-1.4\n')
+    offsets = [0]
+    for number, item in enumerate(objects, 1):
+        offsets.append(len(pdf))
+        pdf.extend(f'{number} 0 obj\n'.encode('ascii') + item + b'\nendobj\n')
+    startxref = len(pdf)
+    pdf.extend(f'xref\n0 {len(objects) + 1}\n'.encode('ascii'))
+    pdf.extend(b'0000000000 65535 f \n')
+    for offset in offsets[1:]:
+        pdf.extend(f'{offset:010d} 00000 n \n'.encode('ascii'))
+    pdf.extend(
+        f'trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>'
+        f'\nstartxref\n{startxref}\n%%EOF\n'.encode('ascii')
+    )
+    path.write_bytes(pdf)
 
 
 @pytest.mark.parametrize(
@@ -72,7 +95,7 @@ def test_every_ocr_result_has_its_own_database_row(
     monkeypatch.setattr(operation, 'process_row', fake_process_row)
     monkeypatch.setattr(
         transcribe_pdfs, 'get_database_session',
-        lambda **kwargs: __import__('sqlalchemy.orm', fromlist=['sessionmaker']).sessionmaker(engine),
+        lambda **kwargs: sessionmaker(engine),
     )
 
     args = argparse.Namespace(
