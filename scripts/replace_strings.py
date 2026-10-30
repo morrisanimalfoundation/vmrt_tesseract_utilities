@@ -10,6 +10,7 @@ from typing import List, Optional
 
 from sqlalchemy import and_
 
+from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.database import (StringReplacementCompletion,
                                                StringReplacementPass,
                                                TranscriptionInput,
@@ -321,7 +322,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--debug-sql", action="store_true", help="Enable SQL debugging")
     parser.add_argument("--no-multiprocessing", action="store_true", help="Disable multiprocessing for debugging")
     parser.add_argument("--max-workers", type=int, default=4, help="Maximum number of worker processes for multiprocessing")
-    return parser.parse_args()
+    return parser.parse_args(normalize_flag_spelling(sys.argv[1:]))
 
 
 if __name__ == "__main__":

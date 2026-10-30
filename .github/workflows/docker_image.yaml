@@ -1,0 +1,215 @@
+# Builds the workspace Docker image for Intel (amd64) and Apple Silicon (arm64), smoke-tests it, and on
+# main publishes it to ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities, which run.sh pulls.
+# Pull requests are built and tested but not published. The weekly run picks up security updates to the
+# python:3.11 base image.
+name: Docker Image
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - Dockerfile
+      - requirements.in
+      - requirements.txt
+      - tests/docker_smoke_test.py
+      - .github/workflows/docker_image.yaml
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - Dockerfile
+      - requirements.in
+      - requirements.txt
+      - tests/docker_smoke_test.py
+      - .github/workflows/docker_image.yaml
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities
+  PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+  # Trivy runs from its container image, pinned by digest, rather than its GitHub Action, whose tags were
+  # hijacked in a 2026 supply-chain compromise. 0.69.3 predates it.
+  TRIVY_IMAGE: aquasec/trivy:0.69.3@sha256:bcc376de8d77cfe086a917230e818dc9f8528e3c852f7b1aff648949b6258d1c
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set platform slug
+        run: echo "PLATFORM_SLUG=${{ matrix.platform }}" | tr / - >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GitHub Container Registry
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # One build is both loaded for the tests below and, on main, pushed by digest, so the published image is
+      # exactly the one that was tested. It is only tagged (in the publish job) if every step here passes.
+      - name: Build
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          pull: true
+          # The weekly run rebuilds from scratch so apt-get upgrade picks up new Debian security fixes even when
+          # the base image hasn't changed.
+          no-cache: ${{ github.event_name == 'schedule' }}
+          outputs: |
+            type=docker,name=vmrt-workspace:test
+            ${{ env.PUBLISH == 'true' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE) || '' }}
+          cache-from: type=gha,scope=${{ env.PLATFORM_SLUG }}
+          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_SLUG }}
+
+      - name: Smoke test
+        run: docker run --rm --user 1234:1234 -v "$PWD:/workspace" vmrt-workspace:test python tests/docker_smoke_test.py
+
+      # Pull requests fail on a critical vulnerability that already has a fix. Published images are scanned in the
+      # scan job instead, so a new finding never holds back the weekly base image security updates.
+      - name: Vulnerability scan
+        if: github.event_name == 'pull_request'
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "$TRIVY_IMAGE" image \
+            --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 --no-progress --timeout 30m \
+            vmrt-workspace:test
+
+      - name: Save digest
+        if: env.PUBLISH == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          if [[ $digest != sha256:* ]]; then
+            echo "::error::The build did not report a pushed image digest (got '$digest')."
+            exit 1
+          fi
+          touch "$RUNNER_TEMP/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: env.PUBLISH == 'true'
+        with:
+          name: digest-${{ env.PLATFORM_SLUG }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Combines the per-platform images into one multi-platform tag, so `docker pull` picks the right one.
+  publish:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    # Publish runs (pushes to main, the weekly rebuild, manual runs) wait for each other, so one can't move :main
+    # while another is still publishing.
+    concurrency:
+      group: docker-image-publish
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.index.outputs.digest }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # The index is pushed under its sha-<commit> tag and attested before :main moves to it, so :main never
+      # points at an image without provenance.
+      - name: Create and push the multi-platform image
+        id: index
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          sources=()
+          for digest in *; do sources+=("$IMAGE@sha256:$digest"); done
+          docker buildx imagetools create \
+            --metadata-file "$RUNNER_TEMP/index-metadata.json" \
+            --tag "$IMAGE:sha-${GITHUB_SHA::7}" \
+            --annotation "index:org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            --annotation "index:org.opencontainers.image.description=VMRT Tesseract Utilities workspace image" \
+            "${sources[@]}"
+          digest=$(jq -r '."containerimage.descriptor".digest' "$RUNNER_TEMP/index-metadata.json")
+          if [[ $digest != sha256:* ]]; then
+            echo "::error::Could not read the image index digest (got '$digest')."
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      # Lets anyone check an image came from this workflow: gh attestation verify oci://<image> -R <this repo>
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.index.outputs.digest }}
+          push-to-registry: true
+
+      - name: Point main at the attested image
+        run: |
+          docker buildx imagetools create --tag "$IMAGE:main" "$IMAGE@${{ steps.index.outputs.digest }}"
+          docker buildx imagetools inspect "$IMAGE:main"
+
+  # Scans the published amd64 and arm64 images and reports high and critical vulnerabilities that have a fix to the
+  # repository's Security > Code scanning tab, so new findings in :main (including from the weekly rebuild) show
+  # up there. Trivy pulls each platform's image straight from the registry, logged in with this job's token.
+  scan:
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    steps:
+      - name: Set platform slug
+        run: echo "PLATFORM_SLUG=${{ matrix.platform }}" | tr / - >> "$GITHUB_ENV"
+
+      - name: Scan the published image
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          docker run --rm -e TRIVY_USERNAME -e TRIVY_PASSWORD -v "$RUNNER_TEMP:/out" "$TRIVY_IMAGE" image \
+            --image-src remote --platform "${{ matrix.platform }}" \
+            --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --no-progress --timeout 30m \
+            --format sarif --output /out/trivy.sarif \
+            "$IMAGE@${{ needs.publish.outputs.digest }}"
+
+      - name: Upload to code scanning
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: ${{ runner.temp }}/trivy.sarif
+          category: container-image-${{ env.PLATFORM_SLUG }}

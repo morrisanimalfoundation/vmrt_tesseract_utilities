@@ -1,0 +1,14 @@
+# CPU-only PyTorch wheels. Without this index, torch pulls in ~16 NVIDIA CUDA packages (several GB).
+--extra-index-url https://download.pytorch.org/whl/cpu
+numpy==2.0.2
+pdf2image==1.17.0
+# The [transformers] extra and torch are required by the PII scrubber's default NLP config
+# (scripts/scrubbers/config/stanford-deidentifier-base_nlp.yaml). Do not remove them.
+presidio_analyzer[transformers]==2.2.357
+presidio_anonymizer==2.2.357
+PyMySQL==1.1.1
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.2
+SQLAlchemy==2.0.37
+tesserocr==2.7.1
+torch==2.14.1+cpu

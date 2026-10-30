@@ -26,6 +26,7 @@ Goals:
 - [Troubleshooting](#troubleshooting)
 - [Working with git](#working-with-git)
 - [Development](#development)
+- [License](#license)
 
 ## How it works
 
@@ -129,11 +130,12 @@ subject ID are skipped.
 ./run.sh
 ```
 
-The first run downloads and builds everything, which takes a while — expect to wait several minutes at
-least. Later runs are much faster. When it finishes you will see a new prompt that looks something like this:
+The first run downloads the prebuilt workspace image (about 1.4 GB) and the MySQL image, which takes a few
+minutes depending on your connection. Later runs only download what has changed. When it finishes you will see
+a new prompt that looks something like this:
 
 ```
-jenkins@3f2a9c1d7e4b:/workspace$
+vmrt@3f2a9c1d7e4b:/workspace$
 ```
 
 You are now **inside the container**. `/workspace` is this repository, and `/data` is the EMR folder you
@@ -190,16 +192,16 @@ visit a document belongs to.
 
 ```bash
 python scripts/metadata_miners/visit_date_miner.py /workspace/output \
-  --visit_date_tsv=data/vet_visits.tsv \
-  --dog_profile_tsv=data/dog_profile.tsv
+  --visit-date-tsv=data/vet_visits.tsv \
+  --dog-profile-tsv=data/dog_profile.tsv
 ```
 
 ### Options
 
 Add `--help` to any script to see everything it accepts, e.g. `python scripts/transcribe_pdfs.py --help`.
 
-Flag spelling is not consistent between scripts — some use hyphens and some use underscores. Use the
-spelling in this table:
+All flags use hyphens (e.g. `--chunk-size`). The older underscore spellings (`--chunk_size`) are still accepted
+for backwards compatibility, so existing scripts and commands keep working. Use the hyphen form in new code:
 
 | Script | Document type | Batch size | Skip records | Show SQL | Other |
 | --- | --- | --- | --- | --- | --- |
@@ -207,7 +209,7 @@ spelling in this table:
 | `transcribe_pdfs.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | |
 | `replace_strings.py` | `--document_type` | `--chunk_size` | `-` | `--debug-sql` | `--max-workers`, `--no-multiprocessing` |
 | `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config` |
-| `visit_date_miner.py` | — | `--chunk_size` | `--offset` | `--debug_sql` | `--visit_date_threshold`, `--search_unstructured_text_dir` |
+| `visit_date_miner.py` | — | `--chunk-size` | `--offset` | `--debug-sql` | `--visit-date-threshold`, `--search-unstructured-text-dir` |
 
 - **Document type** (`document`, `page`, or `block`; default `document`) controls how finely the OCR output
   is split: one text file per PDF, one per page, or one per detected line of text. Whatever you choose in
@@ -216,9 +218,9 @@ spelling in this table:
   re-run steps 2 and 4 until they stop finding files (step 2 prints `Found 0 files to transcribe`). Step 3 skips files already completed for that replacement pass, so rerun the same command to process the next batch; no `--offset` is needed.
 - `--threshold` (step 4) is the minimum confidence score, from 0 to 1, a detection needs before it is
   removed. The default `0.0` removes everything the model flags.
-- `--visit_date_threshold` (step 5) is how many days apart a date in the text and a known visit date can be
+- `--visit-date-threshold` (step 5) is how many days apart a date in the text and a known visit date can be
   and still count as a match. The default is 3.
-- `--search_unstructured_text_dir` (step 5) also searches the raw OCR text for dates, not only the PII
+- `--search-unstructured-text-dir` (step 5) also searches the raw OCR text for dates, not only the PII
   scrubber's report.
 
 `scripts/scrubbers/scrub_txt_files.sh /workspace/output` is an alternative way to run step 4. It installs
@@ -336,7 +338,8 @@ If you are new to git, these are the only commands you need to use this project:
   ```bash
   git pull
   ```
-  If `./run.sh` behaves differently after a pull, that is expected — it rebuilds whatever changed.
+  `./run.sh` also downloads the latest workspace image each time it starts, so you don't need to do anything
+  extra to get updated tools.
 - **See what you have changed:**
   ```bash
   git status
@@ -371,3 +374,42 @@ rather than with `git add .`, so nothing extra is swept in.
 - **Linting**: `./sort_and_lint.sh` runs `isort` and `flake8` (line length is not enforced). Install
   dependencies first with `pip install -r requirements/ci_requirements.txt`.
 - Both checks run automatically on every pull request to `main`.
+- **Docker image**: `./run.sh` downloads a prebuilt image from
+  `ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities`. The image holds the tools and Python packages
+  only; the code is mounted from your copy of the repository, so code changes never need a new image. The
+  `Docker Image` workflow (`.github/workflows/docker_image.yaml`) rebuilds and publishes it when `Dockerfile`
+  or the requirements change on `main`, and weekly (from scratch, with Debian's latest security fixes). Pull
+  requests that touch those files are built and checked with `tests/docker_smoke_test.py` but not published.
+  If you are changing `Dockerfile`, `requirements.in`, or `requirements.txt`, use `./run.sh --build` to build
+  the image locally instead (a few minutes), and run the smoke test from the repository folder:
+  ```bash
+  docker run --rm --user 1234:1234 -v "$PWD:/workspace" ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities:main python tests/docker_smoke_test.py
+  ```
+  Each published image is tagged `main` and `sha-<commit>` (the first 7 characters of the commit it was built
+  from). Use a `sha-` tag when you need exactly the same image every time. To check that an image was built by
+  this repository's workflow, run:
+  ```bash
+  gh attestation verify oci://ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities:main -R morrisanimalfoundation/vmrt_tesseract_utilities
+  ```
+- **Security**: pull requests that change the image fail if it has a critical vulnerability with a fix
+  available. Every published image (amd64 and arm64) is scanned too, and its high and critical findings that
+  have a fix appear under the repository's **Security → Code scanning** tab. When a pinned Python package gets a known vulnerability
+  with a fix, Dependabot opens a pull request that updates it in `requirements.in` and `requirements.txt`.
+- **Dependencies**: `requirements.in` lists the direct dependencies and `requirements.txt` is generated from
+  it, so don't edit `requirements.txt` by hand. To regenerate it, run this from the repository folder, outside
+  the container (it uses the same Python version as the Docker image):
+  ```bash
+  docker run --rm -v "$PWD:/src" -w /src python:3.11 sh -c "pip install -q pip-tools==7.6.2 && pip-compile --strip-extras requirements.in"
+  ```
+  Existing pins are kept; add `--upgrade` only when you mean to update them. Keep `presidio_analyzer[transformers]`
+  and `torch` in `requirements.in` (the PII scrubber needs them) and keep the CPU-only PyTorch index line at the
+  top, which stops `torch` from pulling in several GB of CUDA libraries. The `Requirements Check` workflow fails
+  a pull request if a change to `requirements.in` (a package added, removed, or given a different version) isn't
+  reflected in `requirements.txt`. It can't tell when a pin was edited by hand in `requirements.txt` to another
+  version that still fits, so always regenerate the file with the command above.
+  `requirements/pytest_requirements.txt` pins only the test tools and takes every other version from
+  `requirements.txt`, so a version change there applies to the tests too.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).

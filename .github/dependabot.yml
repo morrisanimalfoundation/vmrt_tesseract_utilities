@@ -1,0 +1,20 @@
+# Keeps the actions used by the workflows up to date, including the commit SHAs docker_image.yaml is pinned to.
+# For Python packages, only security updates: Dependabot opens a pull request when a pinned package has a known
+# vulnerability with a fix, regenerating requirements.txt from requirements.in with pip-compile. Routine version
+# bumps are left off (open-pull-requests-limit: 0) to avoid a stream of torch/spaCy upgrade PRs.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0

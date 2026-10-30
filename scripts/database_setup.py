@@ -1,6 +1,8 @@
 import argparse
+import sys
 
 from vmrt_tesseract_utilities import database
+from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.logging import stdout_logger
 
 """
@@ -67,7 +69,7 @@ def parse_args() -> argparse.Namespace:
         prog='Performs database utility related functions.',)
     parser.add_argument('operation', help='The database operation to perform, install or drop.', choices=['install', 'drop'])
     parser.add_argument('--debug-sql', action='store_true', help='Enable SQL debugging')
-    return parser.parse_args()
+    return parser.parse_args(normalize_flag_spelling(sys.argv[1:]))
 
 
 if __name__ == '__main__':
