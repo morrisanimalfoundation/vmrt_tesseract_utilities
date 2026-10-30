@@ -7,9 +7,8 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from scripts import transcribe_pdfs
-from vmrt_tesseract_utilities.database import (
-    Base, TranscriptionInput, TranscriptionOutput,
-)
+from vmrt_tesseract_utilities.database import (Base, TranscriptionInput,
+                                               TranscriptionOutput)
 
 
 def _make_two_page_pdf(path):
@@ -119,9 +118,9 @@ def test_every_ocr_result_has_its_own_database_row(
 
         by_file = {row.ocr_output_file: row for row in stored_rows}
         for result in results:
-            file_path = (
-                tmp_path / 'unstructured_text' / mode /
-                f"synthetic-{result['page']}-{result['block']}.txt"
+            file_path = tmp_path.joinpath(
+                'unstructured_text', mode,
+                f"synthetic-{result['page']}-{result['block']}.txt",
             )
             assert str(file_path) in by_file
             assert by_file[str(file_path)].ocr_confidence == result['confidence']
