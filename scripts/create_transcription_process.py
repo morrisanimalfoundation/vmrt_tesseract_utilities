@@ -34,7 +34,14 @@ def do_create_transcription_process(args: argparse.Namespace) -> None:
     assets = []
     sessionmaker = get_database_session(echo=args.debug_sql)
     with sessionmaker.begin() as session:
-        for subdir, dirs, files in os.walk(args.path_to_describe):
+        registered_paths = {
+            path for (path,) in (
+                session.query(TranscriptionInput.input_file)
+                .filter(TranscriptionInput.document_type == args.document_type)
+                .all()
+            )
+        }
+        for subdir, dirs, files in os.walk(os.path.abspath(args.path_to_describe)):
             dog_match = re.search(DOG_ID_RE, subdir)
             if dog_match:
                 dog_id = dog_match.group(0)
@@ -42,6 +49,9 @@ def do_create_transcription_process(args: argparse.Namespace) -> None:
                 continue
             for file in files:
                 filepath = subdir + os.sep + file
+                if filepath in registered_paths:
+                    stdout_logger.info(f"Already registered, skipping: {filepath}")
+                    continue
                 stdout_logger.info(f'Adding to process: {filepath}')
                 input = TranscriptionInput(input_file=filepath, document_type=args.document_type)
                 # This is an easy place to create the associated metadata record.
@@ -49,6 +59,7 @@ def do_create_transcription_process(args: argparse.Namespace) -> None:
                 metadata = TranscriptionMetadata(subject_id=dog_id, transcription_input=input)
                 assets.append(input)
                 assets.append(metadata)
+                registered_paths.add(filepath)
         session.add_all(assets)
     stdout_logger.info('All done!')
 
