@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from dotenv import load_dotenv
 from sqlalchemy import (DateTime, Float, ForeignKey, Integer, String,
-                        create_engine, func, UniqueConstraint)
+                        UniqueConstraint, create_engine, func)
 from sqlalchemy.orm import (DeclarativeBase, Mapped, mapped_column,
                             relationship, sessionmaker)
 
