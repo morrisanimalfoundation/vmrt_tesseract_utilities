@@ -30,7 +30,7 @@ class TranscriptionInput(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     document_type: Mapped[str] = mapped_column(String(30))
     created: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, server_default=func.now())
-    input_file: Mapped[Optional[str]] = mapped_column(String(1024))
+    input_file: Mapped[Optional[str]] = mapped_column(String(255))
     assets: Mapped[List['TranscriptionOutput']] = relationship(
         back_populates='transcription_input', cascade='all, delete-orphan'
     )
