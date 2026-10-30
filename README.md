@@ -217,15 +217,16 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 - **Batch size** defaults to 1000 files per run in steps 2, 3, and 4. If you have more than 1000 files,
   re-run steps 2 and 4 until they stop finding files (step 2 prints `Found 0 files to transcribe`). Step 3 skips files already completed for that replacement pass, so rerun the same command to process the next batch; no `--offset` is needed.
 - `--threshold` (step 4) is the minimum confidence score, from 0 to 1, a detection needs before it is
-  removed. The default `0.0` removes everything the model flags.
+  removed. The default `0.0` removes everything the model flags. Raising it lets identifiers through: the
+  model scores some, such as GRLS subject IDs, ZIP codes and house numbers, around 0.4.
 - `--visit-date-threshold` (step 5) is how many days apart a date in the text and a known visit date can be
   and still count as a match. The default is 3.
 - `--search-unstructured-text-dir` (step 5) also searches the raw OCR text for dates, not only the PII
   scrubber's report.
 
 `scripts/scrubbers/scrub_txt_files.sh /workspace/output` is an alternative way to run step 4. It installs
-any spaCy models listed in `scripts/scrubbers/config/` first, then runs `pii_scrubber.py` with
-`--threshold=0.45`.
+any spaCy models listed in `scripts/scrubbers/config/` first, then runs `pii_scrubber.py` with the default
+threshold.
 
 ## Where the results go
 
@@ -362,8 +363,9 @@ rather than with `git add .`, so nothing extra is swept in.
 
 ## Development
 
-- **Tests**: `pytest` (configured via `pytest.ini`). The test suite mocks the database and does not require
-  Tesseract, so it can be run on your own computer without Docker:
+- **Tests**: `pytest` (configured via `pytest.ini`). The test suite mocks the database, and the tests that need
+  packages only installed in the image (such as the PII scrubber tests) are skipped outside it, so it can be run
+  on your own computer without Docker:
   ```bash
   python3 -m venv .venv
   source .venv/bin/activate
