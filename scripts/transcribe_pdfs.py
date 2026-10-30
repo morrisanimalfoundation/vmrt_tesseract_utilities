@@ -77,7 +77,7 @@ def run_tesseract(args: argparse.Namespace) -> None:
     if args.document_type == 'block':
         op = TesseractOperationBlock()
     sessionmaker = get_database_session(echo=args.debug_sql)
-    with sessionmaker.begin() as session:
+    with sessionmaker() as session:
         query = (session.query(TranscriptionInput, TranscriptionOutput)
                  .outerjoin(TranscriptionInput.assets)
                  # input_file has a case-sensitive collation, and file extensions can be in any case.
@@ -95,13 +95,17 @@ def run_tesseract(args: argparse.Namespace) -> None:
                 bits = os.path.splitext(os.path.basename(db_input.input_file))
                 output_path = f'{base_path}/{bits[0]}-{ocr_result["page"]}-{ocr_result["block"]}.txt'
                 _write_file(output_path, ocr_result['content'])
+                # Each page or block gets its own row; an existing empty row is filled by the first one.
                 if db_output is None:
                     db_output = TranscriptionOutput()
                 db_output.ocr_output_file = output_path
                 db_output.ocr_confidence = ocr_result['confidence']
                 db_output.transcription_input = db_input
                 db_output_logs.append(db_output)
-                session.add_all(db_output_logs)
+                db_output = None
+            session.add_all(db_output_logs)
+            # Commit per file, so a crash part way through a chunk only loses the file in progress.
+            session.commit()
     stdout_logger.info('All done!')
 
 
