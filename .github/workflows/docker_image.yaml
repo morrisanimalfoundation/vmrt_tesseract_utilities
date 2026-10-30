@@ -1,4 +1,4 @@
-# Builds the workspace Docker image for Intel (amd64) and Apple Silicon (arm64), smoke-tests it, and on
+# Builds the workspace Docker image for Intel (amd64) and Apple Silicon (arm64), tests it, and on
 # main publishes it to ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities, which run.sh pulls.
 # Pull requests are built and tested but not published. The weekly run picks up security updates to the
 # python:3.11 base image.
@@ -13,13 +13,19 @@ on:
       - requirements.txt
       - tests/docker_smoke_test.py
       - .github/workflows/docker_image.yaml
+  # Pull requests also run for code and test changes, since the tests below run that code against the image's
+  # packages. Those changes don't alter the image, so they don't republish it on main.
   pull_request:
     branches: [ "main" ]
     paths:
       - Dockerfile
       - requirements.in
       - requirements.txt
-      - tests/docker_smoke_test.py
+      - requirements/pytest_requirements.txt
+      - pytest.ini
+      - scripts/**
+      - tests/**
+      - vmrt_tesseract_utilities/**
       - .github/workflows/docker_image.yaml
   schedule:
     - cron: "0 6 * * 1"
@@ -65,7 +71,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # One build is both loaded for the tests below and, on main, pushed by digest, so the published image is
-      # exactly the one that was tested. It is only tagged (in the publish job) if every step here passes.
+      # exactly the one that was tested. It is only tagged (in the publish job) if every step here passes, apart
+      # from a failure of the unit tests on the weekly run (see below).
       - name: Build
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -84,6 +91,23 @@ jobs:
 
       - name: Smoke test
         run: docker run --rm --user 1234:1234 -v "$PWD:/workspace" vmrt-workspace:test python tests/docker_smoke_test.py
+
+      # Runs the unit tests against the exact package versions in the image, so tests that need packages only
+      # installed there (such as the PII scrubber's) run too. Every test must run here, so the step fails if any
+      # is skipped or expected to fail. On the weekly run a failure only shows as a warning on a green run and doesn't
+      # block publishing, so the base image security updates still go out.
+      - name: Unit tests
+        continue-on-error: ${{ github.event_name == 'schedule' }}
+        # Unlike the default shell, `shell: bash` sets pipefail, so a pytest failure isn't hidden by tee.
+        shell: bash
+        run: |
+          docker run --rm --user 1234:1234 -v "$PWD:/workspace" vmrt-workspace:test sh -c \
+            "pip install --user --quiet --disable-pip-version-check --no-warn-script-location -r requirements/pytest_requirements.txt && python -m pytest -rs -p no:cacheprovider" \
+            | tee pytest_output.txt
+          if grep -qE '[0-9]+ (skipped|xfailed)' pytest_output.txt; then
+            echo "::error::Some tests were skipped or expected to fail inside the image. Every test should run there."
+            exit 1
+          fi
 
       # Pull requests fail on a critical vulnerability that already has a fix. Published images are scanned in the
       # scan job instead, so a new finding never holds back the weekly base image security updates.

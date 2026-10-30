@@ -37,6 +37,22 @@ def test_replace_multiple_strings():
     assert replacer.replace(text_blob) == expected
 
 
+def test_replace_is_case_insensitive():
+    """
+    Test that the `replace` method matches target strings regardless of case.
+
+    OCR output often has names in capitals (for example "BISCUIT" in a header), and
+    a case-sensitive match would leave them in the text.
+
+    Asserts:
+        Upper-case and mixed-case occurrences are replaced too.
+    """
+    replacer = StringReplacer(["Biscuit"], "<DOG>")
+    text_blob = "BISCUIT was seen today. biscuit is doing well. Biscuit's owner called."
+    expected = "<DOG> was seen today. <DOG> is doing well. <DOG>'s owner called."
+    assert replacer.replace(text_blob) == expected
+
+
 def test_replace_no_match():
     """
     Test the `replace` method when there are no matches.
