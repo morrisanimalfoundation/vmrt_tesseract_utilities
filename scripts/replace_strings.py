@@ -208,13 +208,9 @@ def get_files_to_process(args: argparse.Namespace) -> list:
     with sessionmaker() as session:
         query = (session.query(TranscriptionOutput)
                  .outerjoin(TranscriptionInput.assets)
-                 .outerjoin(
-                        StringReplacementCompletion,
-                        and_(
-                            StringReplacementCompletion.output_id == TranscriptionOutput.id,
-                            StringReplacementCompletion.pass_id == args.replacement_pass_id,
-                        ),
-                    )
+                 .outerjoin(StringReplacementCompletion,
+                            and_(StringReplacementCompletion.output_id == TranscriptionOutput.id,
+                                 StringReplacementCompletion.pass_id == args.replacement_pass_id))
                  .where(TranscriptionInput.document_type == args.document_type)
                  .where(TranscriptionOutput.ocr_output_file != None)  # noqa: E711
                  .where(StringReplacementCompletion.id.is_(None))
