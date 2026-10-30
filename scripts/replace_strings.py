@@ -9,6 +9,7 @@ from concurrent.futures import ProcessPoolExecutor
 from typing import List, Optional
 
 from sqlalchemy import and_
+from sqlalchemy.pool import NullPool
 
 from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.database import (StringReplacementCompletion,
@@ -170,7 +171,8 @@ def process_file_wrapper(output_log: object, strings_to_replace: List[str], pars
     bool
         Whether the file was processed successfully.
     """
-    session_maker = get_database_session(echo=parsed_args.debug_sql)
+    # This runs once per file, so don't keep a connection open for each one.
+    session_maker = get_database_session(echo=parsed_args.debug_sql, poolclass=NullPool)
     with session_maker.begin() as session:
         session.add(output_log)
         if process_file(output_log, strings_to_replace, parsed_args) is None:
