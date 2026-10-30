@@ -165,12 +165,7 @@ def test_replacement_pass_skips_same_pass_and_processes_different_pass(tmp_path,
 
     scrub_and_write_files(first_batch, first_targets, args, use_multiprocessing=False)
 
-    replacement_file = (
-        tmp_path
-        / "list_replacement_output_file"
-        / "document"
-        / "ocr.txt"
-    )
+    replacement_file = tmp_path / "list_replacement_output_file" / "document" / "ocr.txt"
     first_result = replacement_file.read_text()
     assert first_result == "<NAME> <NAME>well"
 
