@@ -5,11 +5,10 @@ from typing import List
 Provides string replacement functionality.
 """
 
-# Matches GRLS subject IDs specifically (a 3-digit site prefix, a dash, and a
-# 6-digit suffix, e.g. "094-000520"), so that variant formats appearing in OCR'd
-# text can also be matched, without also expanding unrelated digit-dash-digit
-# strings (date ranges, kennel numbers, etc.) that a target list might contain.
-GRLS_ID_RE = re.compile(r'^(\d{3})-(\d{6})$')
+# Matches the canonical GRLS subject ID shape: a 3-digit site prefix, a dash,
+# and a 6-digit suffix, e.g. "094-000520". Consumers can search for this shape
+# within a path or use fullmatch() when validating a standalone ID.
+GRLS_ID_RE = re.compile(r'(\d{3})-(\d{6})')
 
 
 class StringReplacer:
@@ -70,7 +69,7 @@ class StringReplacer:
         list of str
             The target string, plus any additional ID variants.
         """
-        match = GRLS_ID_RE.match(target)
+        match = GRLS_ID_RE.fullmatch(target)
         if not match:
             return [target]
         prefix, suffix = match.groups()
@@ -100,7 +99,7 @@ class StringReplacer:
         re.Pattern
             A compiled, case-insensitive pattern matching any variant of the target.
         """
-        is_id = bool(GRLS_ID_RE.match(target))
+        is_id = bool(GRLS_ID_RE.fullmatch(target))
         # Longest first, so a variant that's a prefix of another isn't matched short.
         variants = sorted(cls._expand_id_variants(target), key=len, reverse=True)
         alternation = '|'.join(re.escape(variant) for variant in variants)
