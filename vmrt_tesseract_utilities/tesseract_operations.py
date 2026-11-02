@@ -79,6 +79,11 @@ class TesseractOperationBase(ABC):
         Pages stay in colour: rendering them in greyscale with poppler gives slightly different OCR text and
         confidence scores on colour scans than letting Tesseract do the conversion.
 
+        pdf2image returns each page as a PPM image, and tesserocr passes it on in that format, so Leptonica reads it
+        with its own PPM reader. The older libpng, libtiff, libwebp and libjpeg bundled in the tesserocr wheel aren't
+        used for our pages; keep it that way if this changes (e.g. converting the image first makes tesserocr pass a
+        BMP, which Leptonica also reads itself).
+
         Parameters
         ----------
         input_path: str
