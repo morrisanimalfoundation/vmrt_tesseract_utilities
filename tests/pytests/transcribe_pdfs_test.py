@@ -80,6 +80,7 @@ def test_every_ocr_result_has_its_own_database_row(
             old_row = TranscriptionOutput(transcription_input=input_row)
             session.add(old_row)
         session.commit()
+        input_id = input_row.id
         if has_existing_empty_row:
             old_row_id = old_row.id
 
@@ -120,7 +121,7 @@ def test_every_ocr_result_has_its_own_database_row(
         for result in results:
             file_path = tmp_path.joinpath(
                 'unstructured_text', mode,
-                f"synthetic-{result['page']}-{result['block']}.txt",
+                f"{input_id}-synthetic-{result['page']}-{result['block']}.txt",
             )
             assert str(file_path) in by_file
             assert by_file[str(file_path)].ocr_confidence == result['confidence']
