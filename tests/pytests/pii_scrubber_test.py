@@ -18,7 +18,8 @@ import pytest
 
 # Everything the scrubber's NLP engine loads, including the spaCy model it uses for tokenizing, so a partial local
 # install skips these tests instead of erroring.
-for module in ('presidio_analyzer', 'torch', 'transformers', 'spacy_huggingface_pipelines', 'en_core_web_sm'):
+for module in ('presidio_analyzer', 'presidio_analyzer.nlp_engine.huggingface_token_pipe', 'torch', 'transformers',
+               'en_core_web_sm'):
     pytest.importorskip(module, reason='The PII scrubber packages are only installed in the workspace image.')
 
 from scripts.scrubbers import pii_scrubber  # noqa: E402
