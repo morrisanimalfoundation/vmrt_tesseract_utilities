@@ -196,6 +196,11 @@ python scripts/scrubbers/pii_scrubber.py /workspace/output
 **5. Mine metadata** — compares dates found in the text with each dog's known visit dates to work out which
 visit a document belongs to.
 
+You can run this before step 4: a file without a PII scrubber report is searched using its text instead (the
+output of step 3 if it ran, otherwise the raw OCR text), and the log says so. Raw text is noisier, so a date can
+be matched that the scrubber's report wouldn't have produced, and once a file has a visit date it isn't searched
+again. For the most reliable dates, finish step 4 first.
+
 ```bash
 python scripts/metadata_miners/visit_date_miner.py /workspace/output \
   --visit-date-tsv=data/vet_visits.tsv \
@@ -240,7 +245,7 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 - `--visit-date-threshold` (step 5) is how many days apart a date in the text and a known visit date can be
   and still count as a match. The default is 3.
 - `--search-unstructured-text-dir` (step 5) also searches the raw OCR text for dates, not only the PII
-  scrubber's report.
+  scrubber's report. If step 4 hasn't run for a file, the miner always falls back to its text (see step 5).
 
 `scripts/scrubbers/scrub_txt_files.sh /workspace/output` is an alternative way to run step 4. It installs
 any spaCy models listed in `scripts/scrubbers/config/` first, then runs `pii_scrubber.py` with the default
