@@ -109,7 +109,7 @@ class StringReplacementPass(Base):
 
 class StringReplacementCompletion(Base):
     """
-    Records that a transcription output completed a particular string-replacement pass.
+    Records the result of a transcription output's last attempt at a particular string-replacement pass.
     """
     __tablename__ = "string_replacement_completion"
 
@@ -120,9 +120,13 @@ class StringReplacementCompletion(Base):
     pass_id: Mapped[int] = mapped_column(
         ForeignKey("string_replacement_pass.id"), nullable=False
     )
+    # When the last attempt finished, whether it succeeded or failed.
     completed_at: Mapped[Optional[datetime.datetime]] = mapped_column(
         DateTime, server_default=func.now()
     )
+    # 'success' or 'failed'. Failed outputs are skipped on later runs unless replace_strings.py gets --retry-failed.
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default='success', server_default='success')
+    error: Mapped[Optional[str]] = mapped_column(Text)
 
     __table_args__ = (
         UniqueConstraint(
