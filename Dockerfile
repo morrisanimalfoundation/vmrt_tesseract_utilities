@@ -1,6 +1,6 @@
 # The slim image has no compilers or C headers. Every package in requirements.txt has a prebuilt wheel for
-# both linux/amd64 and linux/arm64, so none are needed, and leaving them out keeps their vulnerabilities (such as
-# kernel header CVEs in linux-libc-dev) out of the image. Check that before adding a package without wheels.
+# both linux/amd64 and linux/arm64, so none are needed (pip install below refuses to build one from source), and
+# leaving them out keeps their vulnerabilities (such as kernel header CVEs in linux-libc-dev) out of the image.
 FROM python:3.11-slim
 # Links the published image on ghcr.io to this repository.
 LABEL org.opencontainers.image.source=https://github.com/morrisanimalfoundation/vmrt_tesseract_utilities
@@ -12,11 +12,13 @@ ENV PIP_NO_CACHE_DIR=1
 ARG TESSDATA_COMMIT=ced78752cc61322fb554c280d13360b35b8684e4
 # The upgrade installs Debian security fixes released since the python:3.11-slim base image was last rebuilt. The
 # options keep the build from stopping to ask about a changed config file, which would fail with no one to answer.
-# poppler-utils is used by pdf2image and yq by install_spacy_models.sh. curl is only needed to download the
-# Tesseract models, so it's removed again in the same step.
+# poppler-utils is used by pdf2image, and poppler-data lets it render PDFs whose fonts use predefined character
+# maps. Tesseract itself comes with the tesserocr wheel, so it isn't installed here. procps and less are for the
+# interactive shell (ps, less). curl is only needed to download the Tesseract models, so it's removed again in the
+# same step.
 RUN apt-get update -y && \
     DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade && \
-    apt-get -y install --no-install-recommends poppler-utils tesseract-ocr yq curl && \
+    apt-get -y install --no-install-recommends poppler-utils poppler-data procps less curl && \
     mkdir -p /usr/share/tessdata && \
     for model in eng osd; do \
       curl -fsSL --retry 3 -o /usr/share/tessdata/$model.traineddata \
@@ -30,7 +32,7 @@ RUN apt-get update -y && \
     rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 # The import check fails the build if the PII scrubber's dependencies are ever dropped from requirements.txt.
-RUN pip install -r requirements.txt &&\
+RUN pip install --only-binary=:all: -r requirements.txt && \
     python -c "import torch, transformers, presidio_analyzer.nlp_engine.huggingface_token_pipe" && \
     python -m spacy download en_core_web_sm && \
     python -m spacy download en_core_web_lg

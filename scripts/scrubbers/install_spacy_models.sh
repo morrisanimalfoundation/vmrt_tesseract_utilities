@@ -16,7 +16,7 @@
 # and install the corresponding spaCy model using `python -m spacy download`.
 #
 # Prerequisites:
-# * yq (command-line YAML processor)
+# * PyYAML, which is installed with the image's Python packages
 #
 # Usage:
 # 1. Save the script as a bash script (e.g., install_spacy_models.sh).
@@ -31,7 +31,7 @@ CONFIG_DIR="$SCRIPT_DIR/config"
 # Loop through each YAML file in the directory
 for config_file in "$CONFIG_DIR"/*.yaml; do
   # Extract the spaCy model name from the YAML file
-  spacy_model=$(yq '.models[].model_name.spacy' "$config_file" | tr -d '"')
+  spacy_model=$(python -c 'import sys, yaml; print(" ".join(m["model_name"]["spacy"] for m in yaml.safe_load(open(sys.argv[1]))["models"]))' "$config_file")
 
   # Check if the spaCy model is already installed
   if ! python -m spacy validate | grep -q $spacy_model; then
