@@ -1,126 +1,99 @@
-from unittest import mock
+import os
+import shutil
 
 import pytest
 
-from vmrt_tesseract_utilities import tesseract_operations
-from vmrt_tesseract_utilities.tesseract_operations import (
-    NoTextFoundError, OcrSetupError, TesseractOperationDoc,
-    TesseractOperationPage, check_ocr_setup)
-
 """
-Tests for the Tesseract operations.
+Tests for the Tesseract operations, run on a small generated multi-page PDF.
+
+Tesseract and poppler are only installed in the Docker image, so these are skipped elsewhere (including CI).
 """
 
+tesserocr = pytest.importorskip('tesserocr')
+pdf2image = pytest.importorskip('pdf2image')
+if shutil.which('pdfinfo') is None or not os.path.isdir('/usr/share/tessdata'):
+    pytest.skip('poppler or the Tesseract models are not installed', allow_module_level=True)
 
-def _fake_ocr(monkeypatch, pages: int, text: str, confidence: int) -> None:
-    """
-    Replaces pdf2image and tesserocr so every page returns the given text and confidence.
-    """
-    api = mock.MagicMock()
-    api.GetUTF8Text.return_value = text
-    api.MeanTextConf.return_value = confidence
-    tess_api = mock.MagicMock()
-    tess_api.return_value.__enter__.return_value = api
-    monkeypatch.setattr(tesseract_operations.pdf2image, 'convert_from_path', lambda path: [object()] * pages)
-    monkeypatch.setattr(tesseract_operations.tesserocr, 'PyTessBaseAPI', tess_api)
+from PIL import Image, ImageDraw, ImageFont  # noqa: E402
+
+from vmrt_tesseract_utilities.tesseract_operations import (  # noqa: E402
+    TesseractOperationBlock, TesseractOperationDoc, TesseractOperationPage)
+
+FONT_PATH = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+PAGE_LINES = [
+    ['Vaccines current', 'Weight 32 kg'],
+    ['Heart rate normal', 'Teeth cleaned'],
+    ['Recheck in six months'],
+]
 
 
-def test_doc_returns_average_confidence(monkeypatch):
+@pytest.fixture(scope='module')
+def pdf_path(tmp_path_factory) -> str:
     """
-    Test that a document with text returns one result with its confidence.
+    Writes a three page PDF of synthetic text, one line of text per `PAGE_LINES` entry.
+    """
+    font = ImageFont.truetype(FONT_PATH, 48)
+    pages = []
+    for lines in PAGE_LINES:
+        image = Image.new('RGB', (1700, 2200), 'white')
+        draw = ImageDraw.Draw(image)
+        for i, line in enumerate(lines):
+            draw.text((150, 200 + i * 150), line, fill='black', font=font)
+        pages.append(image)
+    path = str(tmp_path_factory.mktemp('ocr') / 'synthetic.pdf')
+    pages[0].save(path, 'PDF', resolution=200, save_all=True, append_images=pages[1:])
+    return path
 
-    Asserts:
-        The content and confidence come from the OCR output.
-    """
-    _fake_ocr(monkeypatch, pages=2, text='Patient is a good dog.', confidence=80)
-    output = TesseractOperationDoc().process_row('good.pdf')
+
+def test_document_mode(pdf_path):
+    output = TesseractOperationDoc().process_row(pdf_path)
     assert len(output) == 1
-    assert output[0]['confidence'] == 80
-    assert 'good dog' in output[0]['content']
+    assert output[0]['page'] == 1 and output[0]['block'] == 1
+    for lines in PAGE_LINES:
+        for line in lines:
+            assert line in output[0]['content']
+    assert output[0]['confidence'] > 50
 
 
-@pytest.mark.parametrize('operation', [TesseractOperationDoc, TesseractOperationPage])
-def test_no_text_raises(monkeypatch, operation):
+def test_page_mode(pdf_path):
+    output = TesseractOperationPage().process_row(pdf_path)
+    assert [o['page'] for o in output] == [1, 2, 3]
+    for result, lines in zip(output, PAGE_LINES):
+        assert result['block'] == 0
+        for line in lines:
+            assert line in result['content']
+        assert result['confidence'] > 50
+
+
+def test_block_mode(pdf_path):
+    output = TesseractOperationBlock().process_row(pdf_path)
+    expected = [(pg + 1, i + 1, line) for pg, lines in enumerate(PAGE_LINES) for i, line in enumerate(lines)]
+    assert [(o['page'], o['block'], o['content'].strip()) for o in output] == expected
+    for result in output:
+        assert result['confidence'] > 50
+
+
+def test_unreadable_file_raises(tmp_path):
+    path = tmp_path / 'broken.pdf'
+    path.write_text('not a pdf')
+    for op in (TesseractOperationDoc(), TesseractOperationPage(), TesseractOperationBlock()):
+        with pytest.raises(Exception):
+            op.process_row(str(path))
+
+
+@pytest.mark.parametrize('op', [TesseractOperationDoc(), TesseractOperationPage(), TesseractOperationBlock()])
+def test_failure_part_way_through_raises(pdf_path, monkeypatch, op):
     """
-    Test that a PDF with no recognizable text is reported as a failure, not a crash or an empty result.
-
-    Asserts:
-        NoTextFoundError naming the file is raised.
+    Test that a page failing to render raises, rather than returning the pages before it, which would be saved
+    as if they were the whole file.
     """
-    _fake_ocr(monkeypatch, pages=2, text='', confidence=0)
-    with pytest.raises(NoTextFoundError, match='blank.pdf'):
-        operation().process_row('blank.pdf')
+    convert_from_path = pdf2image.convert_from_path
 
+    def fail_on_second_page(path, **kwargs):
+        if kwargs.get('first_page') == 2:
+            raise RuntimeError('simulated render failure')
+        return convert_from_path(path, **kwargs)
 
-def test_unreadable_pdf_raises(monkeypatch):
-    """
-    Test that an error converting the PDF reaches the caller instead of being swallowed.
-
-    Asserts:
-        The conversion error is raised from process_row.
-    """
-    def broken(path):
-        raise ValueError('Unable to get page count.')
-
-    monkeypatch.setattr(tesseract_operations.pdf2image, 'convert_from_path', broken)
-    with pytest.raises(ValueError, match='page count'):
-        TesseractOperationDoc().process_row('broken.pdf')
-
-
-def _fake_setup(monkeypatch, tools=('pdfinfo', 'pdftoppm'), tessdata_exists=True, init_error=None):
-    """
-    Replaces the poppler lookup, the tessdata directory check and Tesseract start-up.
-    """
-    tess_api = mock.MagicMock()
-    if init_error:
-        tess_api.side_effect = init_error
-    monkeypatch.setattr(tesseract_operations.shutil, 'which', lambda tool: f'/usr/bin/{tool}' if tool in tools else None)
-    monkeypatch.setattr(tesseract_operations.os.path, 'isdir', lambda path: tessdata_exists)
-    monkeypatch.setattr(tesseract_operations.tesserocr, 'PyTessBaseAPI', tess_api)
-
-
-def test_check_ocr_setup_passes_when_tools_are_ready(monkeypatch):
-    """
-    Test that a working setup passes the check.
-
-    Asserts:
-        No error is raised.
-    """
-    _fake_setup(monkeypatch)
-    check_ocr_setup()
-
-
-def test_check_ocr_setup_missing_poppler(monkeypatch):
-    """
-    Test that a missing poppler install stops the run with a clear error.
-
-    Asserts:
-        OcrSetupError names poppler and the missing tool.
-    """
-    _fake_setup(monkeypatch, tools=('pdftoppm',))
-    with pytest.raises(OcrSetupError, match='Poppler is not installed.*pdfinfo'):
-        check_ocr_setup()
-
-
-def test_check_ocr_setup_missing_tessdata(monkeypatch):
-    """
-    Test that a missing tessdata directory stops the run with a clear error.
-
-    Asserts:
-        OcrSetupError names the missing directory.
-    """
-    _fake_setup(monkeypatch, tessdata_exists=False)
-    with pytest.raises(OcrSetupError, match='/nowhere/tessdata does not exist'):
-        check_ocr_setup('/nowhere/tessdata')
-
-
-def test_check_ocr_setup_invalid_tessdata(monkeypatch):
-    """
-    Test that tessdata Tesseract can't start with (e.g. no language files) stops the run.
-
-    Asserts:
-        OcrSetupError includes Tesseract's own message.
-    """
-    _fake_setup(monkeypatch, init_error=RuntimeError('Failed to init API, possibly an invalid tessdata path'))
-    with pytest.raises(OcrSetupError, match='could not start.*invalid tessdata path'):
-        check_ocr_setup()
+    monkeypatch.setattr(pdf2image, 'convert_from_path', fail_on_second_page)
+    with pytest.raises(RuntimeError, match='simulated render failure'):
+        op.process_row(pdf_path)

@@ -1,6 +1,6 @@
 # Test-only packages are pinned here. Packages the image also uses take their versions from requirements.txt.
 -c ../requirements.txt
-pytest==8.3.4
+pytest==9.0.3
 pytest-mock==3.14.0
 python-dateutil
 python-dotenv

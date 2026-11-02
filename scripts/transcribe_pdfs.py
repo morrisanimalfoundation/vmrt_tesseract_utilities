@@ -54,6 +54,31 @@ def _write_file(output_path: str, data: str) -> None:
         f.write(data)
 
 
+def _output_path(base_path: str, db_input: TranscriptionInput, ocr_result: dict) -> str:
+    """
+    Builds the path of the text file for one OCR result.
+
+    The name starts with the input's id, so PDFs with the same file name in different folders (such as two
+    dogs' "Medical Records.pdf") don't overwrite each other's text.
+
+    Parameters
+    ----------
+    base_path: str
+      The output directory.
+    db_input: TranscriptionInput
+      The input the result came from.
+    ocr_result: dict
+      The OCR result, with its page and block numbers.
+
+    Returns
+    -------
+    output_path: str
+      The path to write the result to.
+    """
+    name = os.path.splitext(os.path.basename(db_input.input_file))[0]
+    return f'{base_path}/{db_input.id}-{name}-{ocr_result["page"]}-{ocr_result["block"]}.txt'
+
+
 def run_tesseract(args: argparse.Namespace) -> None:
     """
     Runs a Tesseract strategy over the pages of a PDF.
@@ -87,7 +112,7 @@ def run_tesseract(args: argparse.Namespace) -> None:
     if args.document_type == 'block':
         op = TesseractOperationBlock()
     sessionmaker = get_database_session(echo=args.debug_sql)
-    with sessionmaker.begin() as session:
+    with sessionmaker() as session:
         query = (session.query(TranscriptionInput, TranscriptionOutput)
                  .outerjoin(TranscriptionInput.assets)
                  # input_file has a case-sensitive collation, and file extensions can be in any case.
@@ -96,7 +121,10 @@ def run_tesseract(args: argparse.Namespace) -> None:
                  .where(TranscriptionOutput.ocr_output_file == None))  # noqa: E711
         if not args.retry_failed:
             query = query.where(TranscriptionInput.ocr_status.is_distinct_from('failed'))
-        query = query.limit(args.chunk_size).offset(args.offset)
+        # Without an order, which rows --offset skips isn't defined and can change between runs.
+        query = (query.order_by(TranscriptionInput.id, TranscriptionOutput.id)
+                 .limit(args.chunk_size)
+                 .offset(args.offset))
         count = query.count()
         stdout_logger.info(f'Found {count} files to transcribe.')
         failures = []
@@ -110,20 +138,25 @@ def run_tesseract(args: argparse.Namespace) -> None:
                 failures.append((db_input.input_file, error))
                 db_input.ocr_status = 'failed'
                 db_input.ocr_error = error
+                # Commit the failure too, so it's recorded even if a later file crashes the run.
+                session.commit()
                 continue
             db_input.ocr_status = 'success'
             db_input.ocr_error = None
             for ocr_result in output:
-                bits = os.path.splitext(os.path.basename(db_input.input_file))
-                output_path = f'{base_path}/{bits[0]}-{ocr_result["page"]}-{ocr_result["block"]}.txt'
+                output_path = _output_path(base_path, db_input, ocr_result)
                 _write_file(output_path, ocr_result['content'])
+                # Each page or block gets its own row; an existing empty row is filled by the first one.
                 if db_output is None:
                     db_output = TranscriptionOutput()
                 db_output.ocr_output_file = output_path
                 db_output.ocr_confidence = ocr_result['confidence']
                 db_output.transcription_input = db_input
                 db_output_logs.append(db_output)
-                session.add_all(db_output_logs)
+                db_output = None
+            session.add_all(db_output_logs)
+            # Commit per file, so a crash part way through a chunk only loses the file in progress.
+            session.commit()
     _log_run_summary(count, failures)
 
 
