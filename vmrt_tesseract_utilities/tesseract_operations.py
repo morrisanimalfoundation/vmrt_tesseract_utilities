@@ -47,8 +47,11 @@ class TesseractOperationBase(ABC):
             images = pdf2image.convert_from_path(input_path, first_page=pg + 1, last_page=pg + 1)
             image = images[0]
             del images
-            yield pg, image
-            image.close()
+            try:
+                yield pg, image
+            finally:
+                # Also runs if the caller stops part way through, e.g. because OCR on this page failed.
+                image.close()
 
     @staticmethod
     def _open_api() -> tesserocr.PyTessBaseAPI:
