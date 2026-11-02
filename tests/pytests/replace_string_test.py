@@ -147,6 +147,7 @@ def test_replacement_pass_skips_same_pass_and_processes_different_pass(tmp_path,
         debug_sql=False,
         max_workers=1,
         no_multiprocessing=True,
+        retry_failed=False,
     )
 
     first_hash, first_targets = make_pass_hash(
