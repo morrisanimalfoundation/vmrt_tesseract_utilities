@@ -73,17 +73,18 @@ def test_block_mode(pdf_path):
         assert result['confidence'] > 50
 
 
-def test_unreadable_file_returns_nothing(tmp_path):
+def test_unreadable_file_raises(tmp_path):
     path = tmp_path / 'broken.pdf'
     path.write_text('not a pdf')
     for op in (TesseractOperationDoc(), TesseractOperationPage(), TesseractOperationBlock()):
-        assert op.process_row(str(path)) == []
+        with pytest.raises(Exception):
+            op.process_row(str(path))
 
 
 @pytest.mark.parametrize('op', [TesseractOperationDoc(), TesseractOperationPage(), TesseractOperationBlock()])
-def test_failure_part_way_through_returns_nothing(pdf_path, monkeypatch, op):
+def test_failure_part_way_through_raises(pdf_path, monkeypatch, op):
     """
-    Test that a page failing to render returns no results, rather than the pages before it, which would be saved
+    Test that a page failing to render raises, rather than returning the pages before it, which would be saved
     as if they were the whole file.
     """
     convert_from_path = pdf2image.convert_from_path
@@ -94,4 +95,5 @@ def test_failure_part_way_through_returns_nothing(pdf_path, monkeypatch, op):
         return convert_from_path(path, **kwargs)
 
     monkeypatch.setattr(pdf2image, 'convert_from_path', fail_on_second_page)
-    assert op.process_row(pdf_path) == []
+    with pytest.raises(RuntimeError, match='simulated render failure'):
+        op.process_row(pdf_path)

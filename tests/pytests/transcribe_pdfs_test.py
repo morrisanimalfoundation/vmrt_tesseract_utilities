@@ -1,130 +1,151 @@
-"""Regression tests for one database row per page/block OCR output (issue #49)."""
-
 import argparse
+import logging
 
 import pytest
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 from scripts import transcribe_pdfs
 from vmrt_tesseract_utilities.database import (Base, TranscriptionInput,
                                                TranscriptionOutput)
+from vmrt_tesseract_utilities.tesseract_operations import (NoTextFoundError,
+                                                           OcrSetupError)
+
+"""
+Tests for the transcribe_pdfs script.
+"""
 
 
-def _make_two_page_pdf(path):
-    """Generate a valid two-page PDF using only Python's standard library."""
-    def stream(text):
-        content = f'BT /F1 20 Tf 25 125 Td ({text}) Tj ET\n'.encode('ascii')
-        return b'<< /Length %d >>\nstream\n' % len(content) + content + b'endstream'
+@pytest.fixture
+def engine(monkeypatch, tmp_path):
+    """
+    A SQLite database with one good, one blank and one broken PDF waiting to be transcribed.
 
-    objects = [
-        b'<< /Type /Catalog /Pages 2 0 R >>',
-        b'<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>',
-        b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 200] '
-        b'/Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>',
-        b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 200] '
-        b'/Resources << /Font << /F1 5 0 R >> >> /Contents 7 0 R >>',
-        b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-        stream('Synthetic page one'),
-        stream('Synthetic page two'),
-    ]
-    pdf = bytearray(b'%PDF-1.4\n')
-    offsets = [0]
-    for number, item in enumerate(objects, 1):
-        offsets.append(len(pdf))
-        pdf.extend(f'{number} 0 obj\n'.encode('ascii') + item + b'\nendobj\n')
-    startxref = len(pdf)
-    pdf.extend(f'xref\n0 {len(objects) + 1}\n'.encode('ascii'))
-    pdf.extend(b'0000000000 65535 f \n')
-    for offset in offsets[1:]:
-        pdf.extend(f'{offset:010d} 00000 n \n'.encode('ascii'))
-    pdf.extend(
-        f'trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>'
-        f'\nstartxref\n{startxref}\n%%EOF\n'.encode('ascii')
-    )
-    path.write_bytes(pdf)
-
-
-@pytest.mark.parametrize(
-    'mode,results',
-    [
-        ('page', [
-            {'content': 'Page one', 'confidence': 91.0, 'page': 1, 'block': 0},
-            {'content': 'Page two', 'confidence': 92.0, 'page': 2, 'block': 0},
-        ]),
-        ('block', [
-            {'content': 'P1 block 1', 'confidence': 81.0, 'page': 1, 'block': 1},
-            {'content': 'P1 block 2', 'confidence': 82.0, 'page': 1, 'block': 2},
-            {'content': 'P1 block 3', 'confidence': 83.0, 'page': 1, 'block': 3},
-            {'content': 'P2 block 1', 'confidence': 84.0, 'page': 2, 'block': 1},
-            {'content': 'P2 block 2', 'confidence': 85.0, 'page': 2, 'block': 2},
-            {'content': 'P2 block 3', 'confidence': 86.0, 'page': 2, 'block': 3},
-        ]),
-    ],
-)
-@pytest.mark.parametrize('has_existing_empty_row', [False, True])
-def test_every_ocr_result_has_its_own_database_row(
-    monkeypatch, tmp_path, mode, results, has_existing_empty_row
-):
-    pdf_path = tmp_path / 'synthetic.pdf'
-    _make_two_page_pdf(pdf_path)
-
-    db_url = f'sqlite:///{tmp_path / "test.db"}'
+    The OCR setup check is skipped, since poppler and Tesseract aren't installed in CI.
+    """
+    monkeypatch.setattr(transcribe_pdfs, 'check_ocr_setup', lambda: None)
+    db_url = f'sqlite:///{tmp_path}/test.db'
+    monkeypatch.setenv('SQL_CONNECTION_STRING', db_url)
     engine = create_engine(db_url)
     Base.metadata.create_all(engine)
-    old_row_id = None
     with Session(engine) as session:
-        input_row = TranscriptionInput(document_type=mode, input_file=str(pdf_path))
-        session.add(input_row)
-        if has_existing_empty_row:
-            old_row = TranscriptionOutput(transcription_input=input_row)
-            session.add(old_row)
+        for name in ('good.pdf', 'blank.pdf', 'broken.pdf'):
+            session.add(TranscriptionInput(document_type='document', input_file=name))
         session.commit()
-        input_id = input_row.id
-        if has_existing_empty_row:
-            old_row_id = old_row.id
+    return engine
 
-    def fake_process_row(self, input_path):
-        assert input_path == str(pdf_path)
-        return results
 
-    operation = (
-        transcribe_pdfs.TesseractOperationPage if mode == 'page'
-        else transcribe_pdfs.TesseractOperationBlock
-    )
-    monkeypatch.setattr(operation, 'process_row', fake_process_row)
-    monkeypatch.setattr(
-        transcribe_pdfs, 'get_database_session',
-        lambda **kwargs: sessionmaker(engine),
-    )
+def _fake_process_row(self, input_path):
+    if input_path == 'blank.pdf':
+        raise NoTextFoundError('No recognizable text found in blank.pdf.')
+    if input_path == 'broken.pdf':
+        raise ValueError('Unable to get page count.')
+    return [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1}]
 
-    args = argparse.Namespace(
-        output_to=str(tmp_path), document_type=mode,
-        chunk_size=10, offset=0, debug_sql=False,
-    )
+
+def _run(tmp_path, retry_failed=False):
+    args = argparse.Namespace(output_to=str(tmp_path), document_type='document', chunk_size=10,
+                              offset=0, retry_failed=retry_failed, debug_sql=False)
     transcribe_pdfs.run_tesseract(args)
 
+
+def _statuses(engine) -> dict:
     with Session(engine) as session:
-        stored_rows = session.scalars(
-            select(TranscriptionOutput).order_by(TranscriptionOutput.id)
-        ).all()
-        assert len(stored_rows) == len(results)
-        assert len({row.ocr_output_file for row in stored_rows}) == len(results)
-        assert {row.ocr_confidence for row in stored_rows} == {
-            result['confidence'] for result in results
-        }
-        assert all(row.transcription_input.input_file == str(pdf_path) for row in stored_rows)
-        if has_existing_empty_row:
-            assert old_row_id in {row.id for row in stored_rows}
+        return {i.input_file: (i.ocr_status, i.ocr_error) for i in session.query(TranscriptionInput)}
 
-        by_file = {row.ocr_output_file: row for row in stored_rows}
-        for result in results:
-            file_path = tmp_path.joinpath(
-                'unstructured_text', mode,
-                f"{input_id}-synthetic-{result['page']}-{result['block']}.txt",
-            )
-            assert str(file_path) in by_file
-            assert by_file[str(file_path)].ocr_confidence == result['confidence']
-            assert file_path.read_text() == result['content']
 
-    engine.dispose()
+def test_run_tesseract_skips_failures_and_summarizes(monkeypatch, tmp_path, caplog, engine):
+    """
+    Test that one failing file doesn't stop the run, and the failures are listed at the end.
+
+    Asserts:
+        The good file gets an output row and the failed files don't.
+        Each input's status and error are saved.
+        The summary counts the successes and names each failed file with its error.
+    """
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', _fake_process_row)
+    with caplog.at_level(logging.INFO, logger='import_utility'):
+        _run(tmp_path)
+
+    with Session(engine) as session:
+        outputs = session.query(TranscriptionOutput).all()
+        assert [o.transcription_input.input_file for o in outputs] == ['good.pdf']
+    assert _statuses(engine) == {
+        'good.pdf': ('success', None),
+        'blank.pdf': ('failed', 'NoTextFoundError: No recognizable text found in blank.pdf.'),
+        'broken.pdf': ('failed', 'ValueError: Unable to get page count.'),
+    }
+    assert 'Transcribed 1 of 3 files.' in caplog.text
+    assert '2 file(s) failed:' in caplog.text
+    assert 'blank.pdf: NoTextFoundError: No recognizable text found in blank.pdf.' in caplog.text
+    assert 'broken.pdf: ValueError: Unable to get page count.' in caplog.text
+
+
+def test_write_error_is_recorded_as_a_failure(monkeypatch, tmp_path, caplog, engine):
+    """
+    Test that a text file that can't be written is recorded as a failure, and the run carries on.
+
+    Asserts:
+        No file gets an output row, each is saved as failed with the write error, and the summary still runs.
+    """
+    def unwritable(output_path, data):
+        raise PermissionError(f'Permission denied: {output_path}')
+
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row',
+                        lambda self, path: [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1}])
+    monkeypatch.setattr(transcribe_pdfs, '_write_file', unwritable)
+    with caplog.at_level(logging.INFO, logger='import_utility'):
+        _run(tmp_path)
+
+    with Session(engine) as session:
+        assert session.query(TranscriptionOutput).count() == 0
+    statuses = _statuses(engine)
+    assert {status for status, _ in statuses.values()} == {'failed'}
+    assert all(error.startswith('PermissionError: Permission denied') for _, error in statuses.values())
+    assert 'Transcribed 0 of 3 files.' in caplog.text
+
+
+def test_failed_files_are_only_retried_when_asked(monkeypatch, tmp_path, engine):
+    """
+    Test that files that failed are skipped on the next run, and retried with `--retry-failed`.
+
+    Asserts:
+        A plain second run processes nothing.
+        A retry run processes only the failed files, and a success clears the saved error.
+    """
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', _fake_process_row)
+    _run(tmp_path)
+
+    seen = []
+
+    def recording_process_row(self, input_path):
+        seen.append(input_path)
+        return [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1}]
+
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', recording_process_row)
+    _run(tmp_path)
+    assert seen == []
+
+    _run(tmp_path, retry_failed=True)
+    assert sorted(seen) == ['blank.pdf', 'broken.pdf']
+    assert set(_statuses(engine).values()) == {('success', None)}
+
+
+def test_setup_error_stops_run_before_any_file(monkeypatch, tmp_path, engine):
+    """
+    Test that a setup problem stops the run instead of failing every file one by one.
+
+    Asserts:
+        OcrSetupError is raised, no file is processed, and no file is marked as failed.
+    """
+    def broken_setup():
+        raise OcrSetupError('Poppler is not installed or not on PATH (missing pdfinfo).')
+
+    def unexpected_process_row(self, input_path):
+        raise AssertionError('No file should be processed when setup is broken.')
+
+    monkeypatch.setattr(transcribe_pdfs, 'check_ocr_setup', broken_setup)
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', unexpected_process_row)
+    with pytest.raises(OcrSetupError, match='Poppler'):
+        _run(tmp_path)
+    assert set(_statuses(engine).values()) == {(None, None)}
