@@ -10,7 +10,7 @@ Tesseract and poppler are only installed in the Docker image, so these are skipp
 """
 
 tesserocr = pytest.importorskip('tesserocr')
-pytest.importorskip('pdf2image')
+pdf2image = pytest.importorskip('pdf2image')
 if shutil.which('pdfinfo') is None or not os.path.isdir('/usr/share/tessdata'):
     pytest.skip('poppler or the Tesseract models are not installed', allow_module_level=True)
 
@@ -78,3 +78,20 @@ def test_unreadable_file_returns_nothing(tmp_path):
     path.write_text('not a pdf')
     for op in (TesseractOperationDoc(), TesseractOperationPage(), TesseractOperationBlock()):
         assert op.process_row(str(path)) == []
+
+
+@pytest.mark.parametrize('op', [TesseractOperationDoc(), TesseractOperationPage(), TesseractOperationBlock()])
+def test_failure_part_way_through_returns_nothing(pdf_path, monkeypatch, op):
+    """
+    Test that a page failing to render returns no results, rather than the pages before it, which would be saved
+    as if they were the whole file.
+    """
+    convert_from_path = pdf2image.convert_from_path
+
+    def fail_on_second_page(path, **kwargs):
+        if kwargs.get('first_page') == 2:
+            raise RuntimeError('simulated render failure')
+        return convert_from_path(path, **kwargs)
+
+    monkeypatch.setattr(pdf2image, 'convert_from_path', fail_on_second_page)
+    assert op.process_row(pdf_path) == []
