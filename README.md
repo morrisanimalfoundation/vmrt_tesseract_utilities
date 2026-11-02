@@ -243,7 +243,7 @@ computer as well as from inside the container:
 
 | Path | Contents |
 | --- | --- |
-| `output/unstructured_text/<document-type>/` | Raw OCR text (step 2) |
+| `output/unstructured_text/<document-type>/` | Raw OCR text (step 2), one file per PDF, page or line, named `<input id>-<PDF name>-<page>-<block>.txt` |
 | `output/list_replacement_output_file/<document-type>/` | Text after string replacement (step 3) |
 | `output/scrubbed_text/<document-type>/scrubbed_<document-type>/` | Text after PII scrubbing (step 4) |
 | `output/scrubbed_text/<document-type>/scrubbed_confidence/` | One JSON report per file listing what was detected and with what confidence (step 4) |
