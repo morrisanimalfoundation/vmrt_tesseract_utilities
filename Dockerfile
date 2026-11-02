@@ -35,3 +35,11 @@ RUN mkdir -m 1777 /home/vmrt && \
     echo 'PS1="vmrt@\h:\w\$ "' >> /etc/bash.bashrc
 ENV HOME=/home/vmrt USER=vmrt
 WORKDIR /workspace
+# Installs Debian security fixes released since the layers above were cached. CI passes the date as APT_REFRESH,
+# so this layer, and only this one, is rebuilt once a day, and a fix for a newly published vulnerability reaches
+# pull request builds the next day rather than at the weekly rebuild. Local builds don't set it.
+ARG APT_REFRESH=
+RUN echo "Refreshing Debian packages (${APT_REFRESH:-no date given})" && \
+    apt-get update -y && \
+    DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade && \
+    rm -rf /var/lib/apt/lists/*
