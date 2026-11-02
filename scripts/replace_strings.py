@@ -4,6 +4,7 @@ import datetime
 import hashlib
 import json
 import os
+import stat
 import sys
 import tempfile
 import traceback
@@ -147,19 +148,43 @@ def _write_atomically(output_file: str, text: str) -> None:
     """
     directory = os.path.dirname(os.path.abspath(output_file))
     # The temporary file is in the same directory, so os.replace swaps it in with a single rename.
-    with tempfile.NamedTemporaryFile('w', dir=directory, prefix='.', suffix='.tmp', delete=False) as tmp:
-        tmp_path = tmp.name
-        try:
-            tmp.write(text)
-        except BaseException:
-            tmp.close()
-            os.unlink(tmp_path)
-            raise
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix='.', suffix='.tmp')
     try:
+        with os.fdopen(fd, 'w') as tmp:
+            tmp.write(text)
+            # On disk before the rename, so a power cut can't leave the renamed file empty.
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.chmod(tmp_path, _new_file_mode(output_file))
         os.replace(tmp_path, output_file)
     except BaseException:
-        os.unlink(tmp_path)
+        # Also covers a full disk, which often only shows up when the buffered text is flushed.
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
         raise
+
+
+def _new_file_mode(output_file: str) -> int:
+    """
+    Gets the permissions to give a rewritten file: its current ones if it exists, otherwise the ones a plain
+    open() would give it. mkstemp creates temporary files readable only by their owner.
+
+    Parameters
+    ----------
+    output_file : str
+        The file about to be written.
+
+    Returns
+    -------
+    int
+        The permission bits.
+    """
+    if os.path.exists(output_file):
+        return stat.S_IMODE(os.stat(output_file).st_mode)
+    # os.umask can only be read by setting it, so set it back straight away.
+    umask = os.umask(0)
+    os.umask(umask)
+    return 0o666 & ~umask
 
 
 def scrub_and_write_files(process_filepath_data: List[object], strings_to_replace: List[str], parsed_args: argparse.Namespace, use_multiprocessing: bool = True) -> List[tuple]:
@@ -276,7 +301,8 @@ def get_files_to_process(args: argparse.Namespace, failed_this_run: frozenset = 
     results: list
       The list of input files.
     """
-    sessionmaker = get_database_session(echo=args.debug_sql)
+    # With --until-done this runs once per chunk, so don't leave a pool of connections open each time.
+    sessionmaker = get_database_session(echo=args.debug_sql, poolclass=NullPool)
     not_attempted = StringReplacementCompletion.id.is_(None)
     if args.retry_failed:
         selected = or_(not_attempted, StringReplacementCompletion.status == 'failed')
@@ -300,12 +326,12 @@ def get_files_to_process(args: argparse.Namespace, failed_this_run: frozenset = 
     return results
 
 
-def find_missing_outputs(args: argparse.Namespace) -> List[str]:
+def find_missing_outputs(args: argparse.Namespace) -> List[tuple]:
     """
     Finds outputs that completed this pass but whose replacement file no longer exists.
 
-    These are skipped like any other completed output, but the run reports them and ends with EXIT_INCOMPLETE,
-    rather than finding nothing to do and looking successful while later stages point at missing files.
+    The run reports them and ends with EXIT_INCOMPLETE, rather than finding nothing to do and looking successful
+    while later stages point at missing files.
 
     Parameters
     ----------
@@ -314,21 +340,21 @@ def find_missing_outputs(args: argparse.Namespace) -> List[str]:
 
     Returns
     -------
-    list of str
-        The missing files' paths.
+    list of tuple
+        (output_id, path) for each missing file. The path is None if the output has none recorded.
     """
-    sessionmaker = get_database_session(echo=args.debug_sql)
+    sessionmaker = get_database_session(echo=args.debug_sql, poolclass=NullPool)
     with sessionmaker() as session:
-        paths = [path for (path,) in (
-            session.query(TranscriptionOutput.list_replacement_output_file)
+        rows = list(
+            session.query(TranscriptionOutput.id, TranscriptionOutput.list_replacement_output_file)
             .join(TranscriptionOutput.transcription_input)
             .join(StringReplacementCompletion, StringReplacementCompletion.output_id == TranscriptionOutput.id)
             .where(TranscriptionInput.document_type == args.document_type)
             .where(StringReplacementCompletion.pass_id == args.replacement_pass_id)
             .where(StringReplacementCompletion.status == 'success')
             .order_by(TranscriptionOutput.id)
-        )]
-    return [str(path) for path in paths if not path or not os.path.exists(path)]
+        )
+    return [(output_id, path) for output_id, path in rows if not path or not os.path.exists(path)]
 
 
 def count_failed(args: argparse.Namespace) -> int:
@@ -345,7 +371,7 @@ def count_failed(args: argparse.Namespace) -> int:
     int
         The number of failed outputs.
     """
-    sessionmaker = get_database_session(echo=args.debug_sql)
+    sessionmaker = get_database_session(echo=args.debug_sql, poolclass=NullPool)
     with sessionmaker() as session:
         return (session.query(StringReplacementCompletion)
                 .join(TranscriptionOutput, StringReplacementCompletion.output_id == TranscriptionOutput.id)
@@ -459,9 +485,9 @@ def run_pass(args: argparse.Namespace, target_strings: List[str]) -> int:
     """
     Runs the replacement pass over one chunk of files, or every chunk with --until-done, and reports the result.
 
-    Files that fail, and files whose output for this pass has gone missing, don't stop the run: they're listed at
-    the end and the run returns EXIT_INCOMPLETE, so an unattended job keeps making progress and still shows that
-    something needs attention.
+    Files that fail don't stop the run: they're listed at the end and the run returns EXIT_INCOMPLETE, so an
+    unattended job keeps making progress and still shows that the pass isn't finished. Once no files are left to
+    process, the run also checks that every completed output still has its file, and reports any that don't.
 
     Parameters
     ----------
@@ -475,10 +501,6 @@ def run_pass(args: argparse.Namespace, target_strings: List[str]) -> int:
     int
         The exit code: 0 if everything succeeded, EXIT_INCOMPLETE if some files failed or are missing.
     """
-    missing = find_missing_outputs(args)
-    if missing:
-        stdout_logger.warning(f"{len(missing)} file(s) completed this pass, but their output file is missing. "
-                              f"They're skipped; see the summary at the end.")
     processed = 0
     failures = []
     while True:
@@ -489,15 +511,19 @@ def run_pass(args: argparse.Namespace, target_strings: List[str]) -> int:
         failures.extend(scrub_and_write_files(files, target_strings, args, not args.no_multiprocessing))
         if not args.until_done:
             break
+    # Checking every completed output is only worth it when nothing is left to do, which is when a missing file
+    # would otherwise make the pass look finished. A full chunk means more files may be waiting.
+    nothing_left = not files or len(files) < args.chunk_size
+    missing = find_missing_outputs(args) if nothing_left else []
     # Includes files that failed on earlier runs and were skipped, so the pass isn't reported as done until
     # they're fixed or retried.
     failed_total = count_failed(args)
-    _log_summary(args, processed, failures, failed_total, missing)
+    _log_summary(args, processed, failures, failed_total, missing, nothing_left)
     return EXIT_INCOMPLETE if failed_total or missing else 0
 
 
 def _log_summary(args: argparse.Namespace, processed: int, failures: List[tuple], failed_total: int,
-                 missing: List[str]) -> None:
+                 missing: List[tuple], checked_missing: bool) -> None:
     """
     Logs how many files were processed, and lists the failed and missing files with what to do about them.
 
@@ -513,8 +539,10 @@ def _log_summary(args: argparse.Namespace, processed: int, failures: List[tuple]
         (output_id, input_file, error) for each file that failed in this run.
     failed_total : int
         The number of files currently marked as failed for this pass, including from earlier runs.
-    missing : list of str
-        The paths of completed outputs whose file is missing.
+    missing : list of tuple
+        (output_id, path) for each completed output whose file is missing.
+    checked_missing : bool
+        Whether this run checked for missing files. If it did and found none, an old report is removed.
     """
     stdout_logger.info(f"All done! Replaced strings in {processed - len(failures)} of {processed} files.")
     if failures:
@@ -526,15 +554,21 @@ def _log_summary(args: argparse.Namespace, processed: int, failures: List[tuple]
     if failed_total:
         stdout_logger.warning(f"{failed_total} file(s) in total have failed this pass. They're skipped on later "
                               f"runs; fix the cause and run again with --retry-failed.")
+    if failed_total or missing:
+        stdout_logger.warning("Don't start step 4 (PII scrubbing) until this pass finishes with exit code 0: these "
+                              "files still contain the strings this pass should have replaced.")
+    report = os.path.join(args.output_dir, f"missing_replacement_outputs_pass_{args.replacement_pass_id}.txt")
+    if checked_missing and not missing and os.path.exists(report):
+        os.remove(report)
     if missing:
-        report = os.path.join(args.output_dir, f"missing_replacement_outputs_pass_{args.replacement_pass_id}.txt")
+        lines = [f"output {output_id}: {path or '(no path recorded)'}" for output_id, path in missing]
         os.makedirs(args.output_dir, exist_ok=True)
         with open(report, "w") as f:
-            f.write("\n".join(missing) + "\n")
+            f.write("\n".join(lines) + "\n")
         stdout_logger.warning(f"{len(missing)} file(s) completed this pass, but their output file is missing "
                               f"(full list in {report}):")
-        for path in missing[:MAX_LISTED]:
-            stdout_logger.warning(f"  {path}")
+        for line in lines[:MAX_LISTED]:
+            stdout_logger.warning(f"  {line}")
         if len(missing) > MAX_LISTED:
             stdout_logger.warning(f"  ... and {len(missing) - MAX_LISTED} more.")
         stdout_logger.warning("A file's text is the result of every pass run on it, so it can only be rebuilt from "

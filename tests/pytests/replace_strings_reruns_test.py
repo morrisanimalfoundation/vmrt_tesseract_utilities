@@ -121,7 +121,8 @@ def test_missing_output_is_reported_and_others_still_processed(db, tmp_path, cap
     _add_outputs(db, tmp_path, ['first'])
     replace_strings.run_pass(_args(tmp_path), ['Max'])
     with db() as session:
-        first_output = session.query(TranscriptionOutput).one().list_replacement_output_file
+        first = session.query(TranscriptionOutput).one()
+        first_id, first_output = first.id, first.list_replacement_output_file
     os.remove(first_output)
     _add_outputs(db, tmp_path, ['second'])
 
@@ -132,9 +133,67 @@ def test_missing_output_is_reported_and_others_still_processed(db, tmp_path, cap
     assert _statuses(db)['second.txt'] == ('success', None)
     assert 'Replaced strings in 1 of 1 files.' in caplog.text
     assert '1 file(s) completed this pass, but their output file is missing' in caplog.text
+    assert "Don't start step 4" in caplog.text
     report = os.path.join(args.output_dir, f'missing_replacement_outputs_pass_{args.replacement_pass_id}.txt')
     with open(report) as f:
-        assert f.read().split() == [first_output]
+        assert f.read() == f'output {first_id}: {first_output}\n'
+
+    # Once the file is back, the next run finds nothing missing and removes the old report.
+    with open(first_output, 'w') as f:
+        f.write('rebuilt')
+    assert replace_strings.run_pass(args, ['Max']) == 0
+    assert not os.path.exists(report)
+
+
+def test_missing_check_waits_until_nothing_is_left(db, tmp_path, monkeypatch):
+    """
+    Test that completed outputs are only checked once no files are left to process, not on every chunk's run.
+    """
+    _add_outputs(db, tmp_path, ['a', 'b', 'c'])
+    checks = []
+    monkeypatch.setattr(replace_strings, 'find_missing_outputs', lambda args: checks.append(1) or [])
+
+    replace_strings.run_pass(_args(tmp_path, chunk_size=2), ['Max'])
+    assert checks == []  # A full chunk: more files may be waiting.
+    replace_strings.run_pass(_args(tmp_path, chunk_size=2), ['Max'])
+    assert checks == [1]
+
+
+def test_written_files_keep_normal_permissions(tmp_path):
+    """
+    Test that a new file gets the permissions a plain write would give it, and a rewritten one keeps its own,
+    rather than the owner-only permissions temporary files are created with.
+    """
+    umask = os.umask(0)
+    os.umask(umask)
+    new_file = tmp_path / 'new.txt'
+    replace_strings._write_atomically(str(new_file), 'text')
+    assert os.stat(new_file).st_mode & 0o777 == 0o666 & ~umask
+
+    existing = tmp_path / 'existing.txt'
+    existing.write_text('old')
+    os.chmod(existing, 0o640)
+    replace_strings._write_atomically(str(existing), 'new')
+    assert os.stat(existing).st_mode & 0o777 == 0o640
+
+
+def test_failed_sync_keeps_the_old_file_and_cleans_up(tmp_path, monkeypatch):
+    """
+    Test that an error saving the new text to disk (such as a full disk) keeps the old file and leaves no
+    temporary file behind.
+    """
+    output = tmp_path / 'record.txt'
+    output.write_text('text from the earlier passes')
+
+    def disk_full(fd):
+        raise OSError(28, 'No space left on device')
+
+    monkeypatch.setattr(replace_strings.os, 'fsync', disk_full)
+    with pytest.raises(OSError, match='No space left'):
+        replace_strings._write_atomically(str(output), 'new text')
+
+    assert output.read_text() == 'text from the earlier passes'
+    assert os.listdir(tmp_path) == ['record.txt']
 
 
 def test_failed_write_keeps_the_old_file(tmp_path):
