@@ -26,7 +26,7 @@ EXPECTED_TEXT = 'Vaccines current'
 def check_imports() -> None:
     """The PII scrubber's NLP engine needs these, and they have gone missing before (#21)."""
     import presidio_analyzer  # noqa: F401
-    import spacy_huggingface_pipelines  # noqa: F401
+    import presidio_analyzer.nlp_engine.huggingface_token_pipe  # noqa: F401
     import torch  # noqa: F401
     import transformers  # noqa: F401
 
