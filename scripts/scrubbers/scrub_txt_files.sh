@@ -19,10 +19,15 @@ fi
 chmod +x "${SCRIPT_DIR}/install_spacy_models.sh"
 /bin/bash "${SCRIPT_DIR}/install_spacy_models.sh"
 
-# No --threshold, so every detection is removed (the default, 0.0). The model scores some identifiers, such as
-# GRLS subject IDs, ZIP codes and house numbers, around 0.4, so a higher threshold leaves them in the text.
-python "${SCRIPT_DIR}/pii_scrubber.py" \
+# No --threshold, so every detection is removed (the default, 0.0). Some identifiers, such as ZIP codes and
+# house numbers, score around 0.4, so a higher threshold leaves them in the text.
+# --until-done keeps going until every file is scrubbed, rather than stopping after one chunk of 1000.
+if ! python "${SCRIPT_DIR}/pii_scrubber.py" \
       "$OUTPUT_DIR" \
-      --config="${SCRIPT_DIR}/config/stanford-deidentifier-base_nlp.yaml"
+      --config="${SCRIPT_DIR}/config/stanford-deidentifier-base_nlp.yaml" \
+      --until-done; then
+  echo "Error: PII scrubbing failed, so some files were not processed."
+  exit 1
+fi
 
 echo "All files processed."

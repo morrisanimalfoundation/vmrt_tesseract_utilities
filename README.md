@@ -208,17 +208,19 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 | `create_transcription_process.py` | `--document-type` | — | — | `--debug-sql` | |
 | `transcribe_pdfs.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | |
 | `replace_strings.py` | `--document-type` | `--chunk-size` | — | `--debug-sql` | `--max-workers`, `--no-multiprocessing` |
-| `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config` |
+| `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config`, `--until-done` |
 | `visit_date_miner.py` | — | `--chunk-size` | `--offset` | `--debug-sql` | `--visit-date-threshold`, `--search-unstructured-text-dir` |
 
 - **Document type** (`document`, `page`, or `block`; default `document`) controls how finely the OCR output
   is split: one text file per PDF, one per page, or one per detected line of text. Whatever you choose in
   step 1 must be passed to steps 2, 3, and 4 as well, or those steps will find nothing to do.
 - **Batch size** defaults to 1000 files per run in steps 2, 3, and 4. If you have more than 1000 files,
-  re-run steps 2 and 4 until they stop finding files (step 2 prints `Found 0 files to transcribe`). Step 3 skips files already completed for that replacement pass, so rerun the same command to process the next batch; no `--offset` is needed.
+  re-run steps 2 and 4 until they stop finding files (step 2 prints `Found 0 files to transcribe`, step 4
+  `Found 0 files to scrub`), or pass `--until-done` to step 4 to scrub every batch in one run. Step 3 skips files already completed for that replacement pass, so rerun the same command to process the next batch; no `--offset` is needed.
 - `--threshold` (step 4) is the minimum confidence score, from 0 to 1, a detection needs before it is
-  removed. The default `0.0` removes everything the model flags. Raising it lets identifiers through: the
-  model scores some, such as GRLS subject IDs, ZIP codes and house numbers, around 0.4.
+  removed. The default `0.0` removes everything the model flags. Raising it lets identifiers through: some,
+  such as ZIP codes and house numbers, score around 0.4. GRLS subject IDs are also matched by pattern with a
+  score of 0.9, so they are removed at any threshold up to that.
 - `--visit-date-threshold` (step 5) is how many days apart a date in the text and a known visit date can be
   and still count as a match. The default is 3.
 - `--search-unstructured-text-dir` (step 5) also searches the raw OCR text for dates, not only the PII
@@ -226,7 +228,7 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 
 `scripts/scrubbers/scrub_txt_files.sh /workspace/output` is an alternative way to run step 4. It installs
 any spaCy models listed in `scripts/scrubbers/config/` first, then runs `pii_scrubber.py` with the default
-threshold.
+threshold and `--until-done`, so it scrubs every file rather than one batch.
 
 ## Where the results go
 

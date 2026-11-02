@@ -3,7 +3,8 @@ import json
 import os
 import sys
 
-from presidio_analyzer import AnalyzerEngine, RecognizerResult
+from presidio_analyzer import (AnalyzerEngine, Pattern, PatternRecognizer,
+                               RecognizerResult)
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_anonymizer import AnonymizerEngine
 
@@ -20,13 +21,19 @@ Leverages presidio to attempt automatic PII stripping.
 
 EXCLUDE_TYPES = frozenset(['IN_PAN'])  # Use frozenset for efficient lookups.
 
+# GRLS subject IDs (e.g. "094-012345"), including the forms they take in OCR'd text: without the dash and with an
+# extra zero-padded digit. The model's ID detections are scaled down to 0.4 by the NLP config
+# (low_confidence_score_multiplier), so matching subject IDs by pattern keeps them above any reasonable threshold.
+SUBJECT_ID_PATTERN = Pattern(name='GRLS subject ID', regex=r'(?<!\d)094-?0?\d{6}(?!\d)', score=0.9)
+
 
 def create_nlp_engine(nlp_config_file: str) -> AnalyzerEngine:
     """
     Creates and configures a Presidio AnalyzerEngine.
 
     Sets up a Presidio AnalyzerEngine using the provided
-    configuration file, which specifies the NLP engine and other settings.
+    configuration file, which specifies the NLP engine and other settings,
+    and adds a pattern recognizer for GRLS subject IDs.
 
     Parameters
     ----------
@@ -46,7 +53,11 @@ def create_nlp_engine(nlp_config_file: str) -> AnalyzerEngine:
     try:
         provider = NlpEngineProvider(conf_file=nlp_config_file)
         engine = provider.create_engine()
-        return AnalyzerEngine(nlp_engine=engine)
+        analyzer = AnalyzerEngine(nlp_engine=engine)
+        analyzer.registry.add_recognizer(
+            PatternRecognizer(supported_entity='ID', name='GrlsSubjectIdRecognizer', patterns=[SUBJECT_ID_PATTERN])
+        )
+        return analyzer
 
     except Exception as e:
         stdout_logger.error(f'Error creating NLP engine: {e}')
@@ -182,7 +193,8 @@ def get_files_to_process(args: argparse.Namespace) -> list:
       The list of input files.
     """
     sessionmaker = get_database_session(echo=args.debug_sql)
-    with sessionmaker.begin() as session:
+    # Load the rows inside the session, so closing it detaches them for process_files to attach to its own.
+    with sessionmaker() as session:
         query = (session.query(TranscriptionOutput)
                  .outerjoin(TranscriptionInput.assets)
                  .where(TranscriptionInput.document_type == args.document_type)
@@ -190,7 +202,32 @@ def get_files_to_process(args: argparse.Namespace) -> list:
                  .where(TranscriptionOutput.pii_scrubber_output_file == None)  # noqa: E711
                  .limit(args.chunk_size)
                  .offset(args.offset))
-    return query.all()
+        results = query.all()
+    return results
+
+
+def scrub_chunks(args: argparse.Namespace, analyzer: AnalyzerEngine) -> None:
+    """
+    Scrubs one chunk of files, or with --until-done, keeps scrubbing chunks until no files are left.
+
+    Each chunk is committed before the next is queried, so the loop ends: a file that fails stops the run with
+    an exception rather than being picked again.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        The parsed args.
+    analyzer : AnalyzerEngine
+        The Presidio analyzer engine.
+    """
+    while True:
+        db_output_logs = get_files_to_process(args)
+        stdout_logger.info(f'Found {len(db_output_logs)} files to scrub.')
+        if not db_output_logs:
+            return
+        process_files(db_output_logs, analyzer, args.output_to, args.threshold)
+        if not args.until_done:
+            return
 
 
 def parse_args() -> argparse.Namespace:
@@ -217,11 +254,12 @@ def parse_args() -> argparse.Namespace:
                         help='The config file for the NLP engine.')
     parser.add_argument('--threshold', required=False, type=float, default=0.0,
                         help='The target confidence threshold for scores.')
+    parser.add_argument('--until-done', action='store_true',
+                        help='Keep scrubbing chunks until no files are left, instead of stopping after one.')
     return parser.parse_args(normalize_flag_spelling(sys.argv[1:]))
 
 
 if __name__ == '__main__':
     args = parse_args()
-    db_output_logs = get_files_to_process(args)
     nlp_engine = create_nlp_engine(args.config)
-    process_files(db_output_logs, nlp_engine, args.output_to, args.threshold)
+    scrub_chunks(args, nlp_engine)

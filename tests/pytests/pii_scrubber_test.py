@@ -9,6 +9,7 @@ run inside the image, where skipped tests fail the build. The first run download
 All of the data below is made up.
 """
 
+import argparse
 import os
 from collections import Counter
 
@@ -101,7 +102,11 @@ EXPECTED_RECOGNIZERS = [
     'TransformersRecognizer',
     'PhoneRecognizer',
     'EmailRecognizer',
+    'GrlsSubjectIdRecognizer',
 ]
+
+# A threshold above the 0.4 that the NLP config scales the model's ID detections down to.
+RAISED_THRESHOLD = 0.5
 
 
 def allowed_difference(baseline: int) -> int:
@@ -117,7 +122,20 @@ def allowed_difference(baseline: int) -> int:
 
 
 @pytest.fixture(scope='module')
-def scrubbed():
+def analyzer():
+    """
+    Creates the analyzer once for the whole module, with the scrubber's default config.
+
+    Returns
+    -------
+    AnalyzerEngine
+        The Presidio analyzer engine.
+    """
+    return pii_scrubber.create_nlp_engine(CONFIG_FILE)
+
+
+@pytest.fixture(scope='module')
+def scrubbed(analyzer):
     """
     Scrubs RECORD once for the whole module, the same way pii_scrubber.py does by default.
 
@@ -126,7 +144,6 @@ def scrubbed():
     tuple
         The scrubbed text and the list of Presidio results.
     """
-    analyzer = pii_scrubber.create_nlp_engine(CONFIG_FILE)
     return pii_scrubber.scrub_pii(RECORD, analyzer, threshold=0.0)
 
 
@@ -170,3 +187,38 @@ def test_recognizer_still_finds_entities(scrubbed, recognizer):
     _, results = scrubbed
     found = {result.recognition_metadata['recognizer_name'] for result in results}
     assert recognizer in found, f'{recognizer} found nothing; recognizers that did: {sorted(found)}'
+
+
+@pytest.mark.parametrize('subject_id', ['094-012345', '094012345', '094-0012345', '0940012345'])
+def test_subject_id_is_removed_at_a_raised_threshold(analyzer, subject_id):
+    """
+    Test that a GRLS subject ID, in each form it takes in OCR'd text, is removed even with a raised threshold.
+    """
+    text, _ = pii_scrubber.scrub_pii(f'GRLS Subject ID: {subject_id}\n', analyzer, threshold=RAISED_THRESHOLD)
+    assert '012345' not in text
+
+
+@pytest.mark.parametrize('number', ['1094-012345', '094-01234567', '9094012345'])
+def test_subject_id_pattern_ignores_longer_numbers(number):
+    """
+    Test that the subject ID pattern doesn't match inside a longer run of digits.
+    """
+    recognizer = pii_scrubber.PatternRecognizer(supported_entity='ID', patterns=[pii_scrubber.SUBJECT_ID_PATTERN])
+    assert recognizer.analyze(f'Ref {number} on file', entities=['ID']) == []
+
+
+@pytest.mark.parametrize('until_done, chunks_scrubbed', [(False, 1), (True, 2)])
+def test_scrub_chunks(monkeypatch, until_done, chunks_scrubbed):
+    """
+    Test that one chunk is scrubbed by default, and every chunk with --until-done.
+    """
+    chunks = [['first', 'second'], ['third'], []]
+    scrubbed_chunks = []
+    monkeypatch.setattr(pii_scrubber, 'get_files_to_process', lambda args: chunks[len(scrubbed_chunks)])
+    monkeypatch.setattr(pii_scrubber, 'process_files',
+                        lambda files, analyzer, output_dir, threshold: scrubbed_chunks.append(files))
+    args = argparse.Namespace(output_to='output', threshold=0.0, until_done=until_done)
+
+    pii_scrubber.scrub_chunks(args, analyzer=None)
+
+    assert scrubbed_chunks == chunks[:chunks_scrubbed]
