@@ -208,24 +208,33 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 | `create_transcription_process.py` | `--document-type` | — | — | `--debug-sql` | |
 | `transcribe_pdfs.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | |
 | `replace_strings.py` | `--document-type` | `--chunk-size` | — | `--debug-sql` | `--max-workers`, `--no-multiprocessing` |
-| `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config` |
+| `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config`, `--until-done` |
 | `visit_date_miner.py` | — | `--chunk-size` | `--offset` | `--debug-sql` | `--visit-date-threshold`, `--search-unstructured-text-dir` |
 
 - **Document type** (`document`, `page`, or `block`; default `document`) controls how finely the OCR output
   is split: one text file per PDF, one per page, or one per detected line of text. Whatever you choose in
   step 1 must be passed to steps 2, 3, and 4 as well, or those steps will find nothing to do.
 - **Batch size** defaults to 1000 files per run in steps 2, 3, and 4. If you have more than 1000 files,
-  re-run steps 2 and 4 until they stop finding files (step 2 prints `Found 0 files to transcribe`). Step 3 skips files already completed for that replacement pass, so rerun the same command to process the next batch; no `--offset` is needed.
+  re-run steps 2 and 4 until they stop finding files (step 2 prints `Found 0 files to transcribe`, step 4
+  `Found 0 files to scrub`), or pass `--until-done` to step 4 to scrub every batch in one run. Step 3 skips files already completed for that replacement pass, so rerun the same command to process the next batch; no `--offset` is needed.
 - `--threshold` (step 4) is the minimum confidence score, from 0 to 1, a detection needs before it is
-  removed. The default `0.0` removes everything the model flags.
+  removed. The default `0.0` removes everything the model flags. Raising it lets identifiers through: some,
+  such as ZIP codes and house numbers, score around 0.4. GRLS subject IDs written as `094-012345` (or with a
+  space, an en dash or nothing for the dash, a letter O for the first zero, or an extra zero after the dash)
+  are also matched by pattern with a score of 0.9, so those are removed at any threshold up to that.
+- Step 4 skips files it has already scrubbed. After changing `--threshold` or updating the scrubber, files
+  scrubbed before the change keep their old output: to scrub them again, set `pii_scrubber_output_file` and
+  `pii_scrubber_confidence_file` back to `NULL` for those rows in `transcription_output` and rerun step 4. In
+  particular, `scrub_txt_files.sh` used `--threshold=0.45` until November 2026, which left subject IDs, ZIP codes
+  and house numbers in the text, so rescrub anything it processed before then.
 - `--visit-date-threshold` (step 5) is how many days apart a date in the text and a known visit date can be
   and still count as a match. The default is 3.
 - `--search-unstructured-text-dir` (step 5) also searches the raw OCR text for dates, not only the PII
   scrubber's report.
 
 `scripts/scrubbers/scrub_txt_files.sh /workspace/output` is an alternative way to run step 4. It installs
-any spaCy models listed in `scripts/scrubbers/config/` first, then runs `pii_scrubber.py` with
-`--threshold=0.45`.
+any spaCy models listed in `scripts/scrubbers/config/` first, then runs `pii_scrubber.py` with the default
+threshold and `--until-done`, so it scrubs every file rather than one batch.
 
 ## Where the results go
 
@@ -362,8 +371,9 @@ rather than with `git add .`, so nothing extra is swept in.
 
 ## Development
 
-- **Tests**: `pytest` (configured via `pytest.ini`). The test suite mocks the database and does not require
-  Tesseract, so it can be run on your own computer without Docker:
+- **Tests**: `pytest` (configured via `pytest.ini`). The test suite mocks the database, and the tests that need
+  packages only installed in the image (such as the PII scrubber tests) are skipped outside it, so it can be run
+  on your own computer without Docker:
   ```bash
   python3 -m venv .venv
   source .venv/bin/activate
