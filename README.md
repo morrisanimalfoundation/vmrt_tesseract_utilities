@@ -178,7 +178,13 @@ The four arguments are, in order: the data file, the column to read values from,
 the output folder. You can run this step several times with different files or columns (for example, a list
 of dog names); each run builds on the previous one.
 
-The script records which files have completed each replacement pass. Re-running the same command skips completed files and selects the next batch; repeat it until no files remain. A different ordered target list or replacement string starts a new pass. Complete all replacement passes before step 4; a later pass does not automatically rerun PII scrubbing for files already scrubbed.
+The script records which files have completed each replacement pass. Re-running the same command skips completed files and selects the next batch; repeat it until no files remain, or pass `--until-done` to process every batch in one run. A different ordered target list or replacement string starts a new pass. Complete all replacement passes before step 4; a later pass does not automatically rerun PII scrubbing for files already scrubbed.
+
+A file that fails (for example, its OCR text file is missing) is recorded as failed for that pass, the run carries on, and the summary at the end lists it. Failed files are skipped on later runs of the pass; add `--retry-failed` to try them again. Each file is written to a temporary file, saved to disk and then swapped into place, so a crash, a power cut or a full disk leaves either the old text or the new text, never a mix. A hard kill part way through a write can leave a hidden `.tmp` file next to the outputs; it's harmless and can be deleted.
+
+Once no files are left to process, the script also checks that every file already completed for the pass still has its output file. Missing ones are listed at the end and in `output/missing_replacement_outputs_pass_<pass id>.txt`, with their `transcription_output` ids; the report is removed once nothing is missing. A file's text is the result of every pass run on it, so a missing one can only be rebuilt from its OCR text: for each listed file, set `list_replacement_output_file` back to `NULL` in `transcription_output`, delete that output's rows in `string_replacement_completion`, then rerun every replacement pass in order.
+
+The script exits with code 0 when everything succeeded, 3 when it finished but some files failed or are missing, and 1 if it couldn't run at all. A scheduler such as Jenkins can tell 3 apart from a crash, but **don't start step 4 until every replacement pass exits with 0**: a failed file still contains the strings the pass should have replaced, and step 4 would scrub and save it anyway, with no later chance to remove them.
 
 **4. Scrub PII** — uses an NLP model to find and remove names, addresses, phone numbers, and similar. The
 first time you run this in a session it downloads the model, which needs an internet connection.
@@ -189,6 +195,11 @@ python scripts/scrubbers/pii_scrubber.py /workspace/output
 
 **5. Mine metadata** — compares dates found in the text with each dog's known visit dates to work out which
 visit a document belongs to.
+
+You can run this before step 4: a file without a PII scrubber report is searched using its text instead (the
+output of step 3 if it ran, otherwise the raw OCR text), and the log says so. Raw text is noisier, so a date can
+be matched that the scrubber's report wouldn't have produced, and once a file has a visit date it isn't searched
+again. For the most reliable dates, finish step 4 first.
 
 ```bash
 python scripts/metadata_miners/visit_date_miner.py /workspace/output \
@@ -207,7 +218,7 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 | --- | --- | --- | --- | --- | --- |
 | `create_transcription_process.py` | `--document-type` | — | — | `--debug-sql` | |
 | `transcribe_pdfs.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--retry-failed` |
-| `replace_strings.py` | `--document-type` | `--chunk-size` | — | `--debug-sql` | `--max-workers`, `--no-multiprocessing` |
+| `replace_strings.py` | `--document-type` | `--chunk-size` | — | `--debug-sql` | `--max-workers`, `--no-multiprocessing`, `--until-done`, `--retry-failed` |
 | `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config`, `--until-done` |
 | `visit_date_miner.py` | — | `--chunk-size` | `--offset` | `--debug-sql` | `--visit-date-threshold`, `--search-unstructured-text-dir` |
 
@@ -234,7 +245,7 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 - `--visit-date-threshold` (step 5) is how many days apart a date in the text and a known visit date can be
   and still count as a match. The default is 3.
 - `--search-unstructured-text-dir` (step 5) also searches the raw OCR text for dates, not only the PII
-  scrubber's report.
+  scrubber's report. If step 4 hasn't run for a file, the miner always falls back to its text (see step 5).
 
 `scripts/scrubbers/scrub_txt_files.sh /workspace/output` is an alternative way to run step 4. It installs
 any spaCy models listed in `scripts/scrubbers/config/` first, then runs `pii_scrubber.py` with the default
@@ -289,6 +300,11 @@ it, or copy it anywhere it is not supposed to be.
   created before step 2 started recording failures needs:
   ```sql
   ALTER TABLE transcription_input ADD COLUMN ocr_status VARCHAR(20), ADD COLUMN ocr_error TEXT;
+  ```
+  and one created before step 3 started recording failures needs:
+  ```sql
+  ALTER TABLE string_replacement_completion
+    ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'success', ADD COLUMN error TEXT;
   ```
 
 ## Reference data files

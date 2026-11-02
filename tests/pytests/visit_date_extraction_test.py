@@ -1,6 +1,7 @@
 import argparse
 import csv
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from scripts.metadata_miners.visit_date_miner import (
     get_date_pairs_within_days, get_dates_from_tsv, get_values_from_tsv,
-    save_visit_dates, set_visit_dates_from_files)
+    save_visit_dates, select_files_to_check, set_visit_dates_from_files)
 from vmrt_tesseract_utilities.database import (Base, TranscriptionInput,
                                                TranscriptionMetadata)
 
@@ -267,33 +268,105 @@ def test_set_visit_dates_from_files_ignores_dates_outside_dogs_life(mock_session
     assert saved_date_pairs(mock_session) == [('test_subject', 1, datetime(2016, 5, 1), datetime(2016, 5, 1))]
 
 
-def test_save_visit_dates(mocker):
+@pytest.mark.parametrize(
+    'files, search_ocr, expected',
+    [
+        # The PII scrubber's report is used when there is one.
+        ({'confidence': 'confidence.json', 'replacement': 'replaced.txt', 'ocr': 'ocr.txt'}, False,
+         ['confidence.json']),
+        # Without a report, the replacement output is used, then the raw OCR text (#22).
+        ({'replacement': 'replaced.txt', 'ocr': 'ocr.txt'}, False, ['replaced.txt']),
+        ({'ocr': 'ocr.txt'}, False, ['ocr.txt']),
+        # --search-unstructured-text-dir adds the raw OCR text, once.
+        ({'confidence': 'confidence.json', 'ocr': 'ocr.txt'}, True, ['confidence.json', 'ocr.txt']),
+        ({'ocr': 'ocr.txt'}, True, ['ocr.txt']),
+        ({'replacement': 'replaced.txt', 'ocr': 'ocr.txt'}, True, ['replaced.txt', 'ocr.txt']),
+        ({'confidence': 'confidence.json'}, True, ['confidence.json']),
+        # Nothing to search.
+        ({}, True, []),
+    ],
+)
+def test_select_files_to_check(tmp_path, files, search_ocr, expected):
     """
-    Test the `save_visit_dates` function.
+    Test which files are searched for a transcription output's dates.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory for the output's files.
+    files : dict
+        The output's files that exist, by kind ('confidence', 'replacement', 'ocr').
+    search_ocr : bool
+        Whether --search-unstructured-text-dir is passed.
+    expected : list
+        The names of the files expected, in order.
+    """
+    for name in files.values():
+        (tmp_path / name).write_text('')
+    path = {kind: str(tmp_path / name) for kind, name in files.items()}
+    row = SimpleNamespace(id=1, pii_scrubber_confidence_file=path.get('confidence'),
+                          list_replacement_output_file=path.get('replacement'), ocr_output_file=path.get('ocr'))
+    args = argparse.Namespace(search_unstructured_text_dir=search_ocr)
+
+    assert select_files_to_check(row, args) == [str(tmp_path / name) for name in expected]
+
+
+def test_select_files_to_check_skips_missing_files(tmp_path, caplog):
+    """
+    Test that a file recorded in the database but missing on disk is left out with a warning, rather than
+    stopping the run.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory for the output's files.
+    caplog : pytest.LogCaptureFixture
+        Captures the warning.
+    """
+    ocr = tmp_path / 'ocr.txt'
+    ocr.write_text('')
+    row = SimpleNamespace(id=7, pii_scrubber_confidence_file=str(tmp_path / 'gone.json'),
+                          list_replacement_output_file=None, ocr_output_file=str(ocr))
+    args = argparse.Namespace(search_unstructured_text_dir=True)
+
+    assert select_files_to_check(row, args) == [str(ocr)]
+    assert 'Skipping missing file for output 7' in caplog.text
+
+
+@pytest.mark.parametrize('files_to_check', [['confidence.json'], []])
+def test_save_visit_dates(mocker, files_to_check):
+    """
+    Test that `save_visit_dates` searches each output's selected files, and skips an output with none.
 
     Parameters
     ----------
     mocker : pytest_mock.plugin.MockerFixture
         Mocker fixture.
+    files_to_check : list
+        What `select_files_to_check` returns for the output.
     """
-    mock_parsed_args = argparse.Namespace(
-        debug_sql=False, search_unstructured_text_dir=False, chunk_size=22, offset=0
-    )
-    mock_session = mocker.MagicMock(spec=Session)
-    mock_get_database_session = mocker.patch(
-        'scripts.metadata_miners.visit_date_miner.get_database_session',
-        return_value=mocker.MagicMock(begin=mocker.MagicMock(return_value=mock_session)),
-    )
-    mock_session.query().outerjoin().all.return_value = [
-        ('test_file.txt', 'test_subject_id')
-    ]
-    mocker.patch(
-        'scripts.metadata_miners.visit_date_miner.set_visit_dates_from_files'
-    )
+    mock_parsed_args = argparse.Namespace(debug_sql=False, search_unstructured_text_dir=False, chunk_size=22,
+                                          offset=0)
+    output = SimpleNamespace(id=1, input_id=1)
+    mock_session_maker = mocker.MagicMock()
+    mock_session = mock_session_maker.begin.return_value.__enter__.return_value
+    # Every query method returns the same mock, so the test doesn't depend on how the query is built.
+    query = mocker.MagicMock()
+    for method in ('outerjoin', 'filter', 'order_by', 'offset', 'limit'):
+        getattr(query, method).return_value = query
+    query.all.return_value = [(output, 'test_subject_id')]
+    mock_session.query.return_value = query
+    mocker.patch('scripts.metadata_miners.visit_date_miner.get_database_session', return_value=mock_session_maker)
+    mocker.patch('scripts.metadata_miners.visit_date_miner.select_files_to_check', return_value=files_to_check)
+    mock_set_visit_dates = mocker.patch('scripts.metadata_miners.visit_date_miner.set_visit_dates_from_files')
 
     save_visit_dates(mock_parsed_args)
 
-    mock_get_database_session.assert_called_once_with(echo=False)
+    if files_to_check:
+        mock_set_visit_dates.assert_called_once_with(files_to_check, mock_session, 'test_subject_id', 1,
+                                                     mock_parsed_args)
+    else:
+        mock_set_visit_dates.assert_not_called()
 
 
 @pytest.mark.parametrize(

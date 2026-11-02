@@ -70,6 +70,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Changes once a day, so the Dockerfile's last layer re-runs apt-get upgrade daily (see APT_REFRESH there).
+      - name: Set the date for refreshing Debian packages
+        run: echo "APT_REFRESH=$(date -u +%F)" >> "$GITHUB_ENV"
+
       # One build is both loaded for the tests below and, on main, pushed by digest, so the published image is
       # exactly the one that was tested. It is only tagged (in the publish job) if every step here passes, apart
       # from a failure of the unit tests on the weekly run (see below).
@@ -83,6 +87,7 @@ jobs:
           # The weekly run rebuilds from scratch so apt-get upgrade picks up new Debian security fixes even when
           # the base image hasn't changed.
           no-cache: ${{ github.event_name == 'schedule' }}
+          build-args: APT_REFRESH=${{ env.APT_REFRESH }}
           outputs: |
             type=docker,name=vmrt-workspace:test
             ${{ env.PUBLISH == 'true' && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE) || '' }}
