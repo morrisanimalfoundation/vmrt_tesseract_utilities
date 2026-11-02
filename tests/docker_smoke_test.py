@@ -7,7 +7,7 @@ as a user that has no account in the image (as docker-compose.yml does):
 
     docker run --rm --user 1234:1234 -v "$PWD:/workspace" <image> python tests/docker_smoke_test.py
 
-It is not part of the pytest suite, which runs without Docker.
+It is not part of the pytest suite, which runs both without Docker and, in CI, inside the image.
 """
 
 import os
