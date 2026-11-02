@@ -132,6 +132,13 @@ def run_tesseract(args: argparse.Namespace) -> None:
             db_output_logs = []
             try:
                 output = op.process_row(db_input.input_file)
+                # Write every text file before touching the database, so a write error (disk full, permissions)
+                # is recorded as a failure like any other, rather than stopping the run.
+                output_paths = []
+                for ocr_result in output:
+                    output_path = _output_path(base_path, db_input, ocr_result)
+                    _write_file(output_path, ocr_result['content'])
+                    output_paths.append(output_path)
             except Exception as e:
                 error = f'{type(e).__name__}: {e}'
                 stdout_logger.error(f'Failed to transcribe {db_input.input_file}: {error}')
@@ -143,9 +150,7 @@ def run_tesseract(args: argparse.Namespace) -> None:
                 continue
             db_input.ocr_status = 'success'
             db_input.ocr_error = None
-            for ocr_result in output:
-                output_path = _output_path(base_path, db_input, ocr_result)
-                _write_file(output_path, ocr_result['content'])
+            for ocr_result, output_path in zip(output, output_paths):
                 # Each page or block gets its own row; an existing empty row is filled by the first one.
                 if db_output is None:
                     db_output = TranscriptionOutput()

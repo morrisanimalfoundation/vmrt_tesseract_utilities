@@ -141,7 +141,7 @@ class TesseractOperationDoc(TesseractOperationBase):
                 self._set_page(api, image)
                 ocr_result = api.GetUTF8Text()
                 confidence = api.MeanTextConf()
-                if len(ocr_result) > 0 and confidence > 0:
+                if ocr_result.strip() and confidence > 0:
                     document_content += "\n" + ocr_result
                     confidence_scores.append(confidence)
         if not confidence_scores:

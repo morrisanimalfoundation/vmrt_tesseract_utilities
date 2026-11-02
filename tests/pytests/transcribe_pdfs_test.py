@@ -81,6 +81,30 @@ def test_run_tesseract_skips_failures_and_summarizes(monkeypatch, tmp_path, capl
     assert 'broken.pdf: ValueError: Unable to get page count.' in caplog.text
 
 
+def test_write_error_is_recorded_as_a_failure(monkeypatch, tmp_path, caplog, engine):
+    """
+    Test that a text file that can't be written is recorded as a failure, and the run carries on.
+
+    Asserts:
+        No file gets an output row, each is saved as failed with the write error, and the summary still runs.
+    """
+    def unwritable(output_path, data):
+        raise PermissionError(f'Permission denied: {output_path}')
+
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row',
+                        lambda self, path: [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1}])
+    monkeypatch.setattr(transcribe_pdfs, '_write_file', unwritable)
+    with caplog.at_level(logging.INFO, logger='import_utility'):
+        _run(tmp_path)
+
+    with Session(engine) as session:
+        assert session.query(TranscriptionOutput).count() == 0
+    statuses = _statuses(engine)
+    assert {status for status, _ in statuses.values()} == {'failed'}
+    assert all(error.startswith('PermissionError: Permission denied') for _, error in statuses.values())
+    assert 'Transcribed 0 of 3 files.' in caplog.text
+
+
 def test_failed_files_are_only_retried_when_asked(monkeypatch, tmp_path, engine):
     """
     Test that files that failed are skipped on the next run, and retried with `--retry-failed`.
