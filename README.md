@@ -206,7 +206,7 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 | Script | Document type | Batch size | Skip records | Show SQL | Other |
 | --- | --- | --- | --- | --- | --- |
 | `create_transcription_process.py` | `--document-type` | — | — | `--debug-sql` | |
-| `transcribe_pdfs.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | |
+| `transcribe_pdfs.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--retry-failed` |
 | `replace_strings.py` | `--document-type` | `--chunk-size` | — | `--debug-sql` | `--max-workers`, `--no-multiprocessing` |
 | `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config`, `--until-done` |
 | `visit_date_miner.py` | — | `--chunk-size` | `--offset` | `--debug-sql` | `--visit-date-threshold`, `--search-unstructured-text-dir` |
@@ -217,6 +217,10 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 - **Batch size** defaults to 1000 files per run in steps 2, 3, and 4. If you have more than 1000 files,
   re-run steps 2 and 4 until they stop finding files (step 2 prints `Found 0 files to transcribe`, step 4
   `Found 0 files to scrub`), or pass `--until-done` to step 4 to scrub every batch in one run. Step 3 skips files already completed for that replacement pass, so rerun the same command to process the next batch; no `--offset` is needed.
+- Step 2 records each PDF it tries as `success` or `failed` (`ocr_status` and `ocr_error` in
+  `transcription_input`), keeps going after a failure, and lists every failed file at the end. Failed files are
+  skipped on later runs; pass `--retry-failed` to try them again. If poppler or Tesseract isn't usable, step 2
+  stops before touching any file.
 - `--threshold` (step 4) is the minimum confidence score, from 0 to 1, a detection needs before it is
   removed. The default `0.0` removes everything the model flags. Raising it lets identifiers through: some,
   such as ZIP codes and house numbers, score around 0.4. GRLS subject IDs written as `094-012345` (or with a
@@ -280,6 +284,12 @@ it, or copy it anywhere it is not supposed to be.
   docker exec -it vmrt-emr-workspace bash
   ```
 - **To start completely clean**, exit the container, delete the `output` folder, and run `./run.sh` again.
+- **If you keep a database between runs** (for example by changing `run.sh`), note that
+  `database_setup.py install` creates missing tables but doesn't add new columns to existing ones. A database
+  created before step 2 started recording failures needs:
+  ```sql
+  ALTER TABLE transcription_input ADD COLUMN ocr_status VARCHAR(20), ADD COLUMN ocr_error TEXT;
+  ```
 
 ## Reference data files
 

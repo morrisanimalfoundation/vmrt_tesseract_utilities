@@ -1,3 +1,5 @@
+import os
+import shutil
 from abc import ABC, abstractmethod
 from typing import Iterator
 
@@ -14,9 +16,55 @@ Provides Tesseract processing with different output scales (document, page, bloc
 TESSDATA_PATH = '/usr/share/tessdata'
 
 
+class NoTextFoundError(Exception):
+    """
+    Raised when Tesseract finds no recognizable text in a document.
+    """
+    pass
+
+
+class OcrSetupError(Exception):
+    """
+    Raised when the OCR tools aren't set up, so every file would fail.
+    """
+    pass
+
+
+def check_ocr_setup(tessdata_path: str = TESSDATA_PATH) -> None:
+    """
+    Checks that poppler and Tesseract are usable before any file is processed.
+
+    Parameters
+    ----------
+    tessdata_path: str
+      The directory holding Tesseract's language data.
+
+    Raises
+    ------
+    OcrSetupError
+      If poppler isn't installed, or Tesseract can't start with the given tessdata.
+    """
+    missing = [tool for tool in ('pdfinfo', 'pdftoppm') if shutil.which(tool) is None]
+    if missing:
+        raise OcrSetupError(f'Poppler is not installed or not on PATH (missing {", ".join(missing)}). '
+                            'pdf2image needs it to read PDFs.')
+    if not os.path.isdir(tessdata_path):
+        raise OcrSetupError(f'Tesseract data directory {tessdata_path} does not exist.')
+    try:
+        with tesserocr.PyTessBaseAPI(tessdata_path):
+            pass
+    except RuntimeError as e:
+        raise OcrSetupError(f'Tesseract could not start with the data in {tessdata_path}: {e}') from e
+
+
 class TesseractOperationBase(ABC):
     """
     A base operation class for further use.
+
+    Notes
+    -----
+    `process_row` raises on failure rather than returning an empty list, so the caller can record it. A file
+    that fails part way through therefore saves nothing, rather than its first pages as if they were all of it.
     """
 
     @abstractmethod
@@ -86,24 +134,21 @@ class TesseractOperationDoc(TesseractOperationBase):
     Returns Tesseract results for entire documents.
     """
     def process_row(self, input_path: str) -> list:
-        output = []
-        try:
-            confidence_scores = []
-            document_content = ''
-            with self._open_api() as api:
-                for pg, image in self._iter_pages(input_path):
-                    self._set_page(api, image)
-                    ocr_result = api.GetUTF8Text()
-                    confidence = api.MeanTextConf()
-                    if len(ocr_result) > 0 and confidence > 0:
-                        document_content += "\n" + ocr_result
-                        confidence_scores.append(confidence)
-            doc_confidence = sum(confidence_scores) / len(confidence_scores)
-            stdout_logger.info(f'Item {input_path} had a confidence score of {doc_confidence}.')
-            output.append({'content': document_content, 'confidence': doc_confidence, 'page': 1, 'block': 1})
-        except Exception as e:
-            stdout_logger.error(str(e))
-        return output
+        confidence_scores = []
+        document_content = ''
+        with self._open_api() as api:
+            for pg, image in self._iter_pages(input_path):
+                self._set_page(api, image)
+                ocr_result = api.GetUTF8Text()
+                confidence = api.MeanTextConf()
+                if ocr_result.strip() and confidence > 0:
+                    document_content += "\n" + ocr_result
+                    confidence_scores.append(confidence)
+        if not confidence_scores:
+            raise NoTextFoundError(f'No recognizable text found in {input_path}.')
+        doc_confidence = sum(confidence_scores) / len(confidence_scores)
+        stdout_logger.info(f'Item {input_path} had a confidence score of {doc_confidence}.')
+        return [{'content': document_content, 'confidence': doc_confidence, 'page': 1, 'block': 1}]
 
 
 class TesseractOperationPage(TesseractOperationBase):
@@ -112,19 +157,15 @@ class TesseractOperationPage(TesseractOperationBase):
     """
     def process_row(self, input_path: str) -> list:
         output = []
-        try:
-            with self._open_api() as api:
-                for pg, image in self._iter_pages(input_path):
-                    self._set_page(api, image)
-                    ocr_result = api.GetUTF8Text()
-                    page_confidence = api.MeanTextConf()
-                    print(f'Item {input_path}:{pg} had a confidence score of {page_confidence}.')
-                    output.append({'content': ocr_result, 'confidence': page_confidence, 'page': pg + 1, 'block': 0})
-        except Exception as e:
-            stdout_logger.error(str(e))
-            # Drop the pages already read: saving them would mark the whole file as done, so the rest of it would
-            # never be retried.
-            return []
+        with self._open_api() as api:
+            for pg, image in self._iter_pages(input_path):
+                self._set_page(api, image)
+                ocr_result = api.GetUTF8Text()
+                page_confidence = api.MeanTextConf()
+                print(f'Item {input_path}:{pg} had a confidence score of {page_confidence}.')
+                output.append({'content': ocr_result, 'confidence': page_confidence, 'page': pg + 1, 'block': 0})
+        if not any(result['content'].strip() for result in output):
+            raise NoTextFoundError(f'No recognizable text found in {input_path}.')
         return output
 
 
@@ -141,26 +182,22 @@ class TesseractOperationBlock(TesseractOperationBase):
 
     def process_row(self, input_path: str) -> list:
         output = []
-        try:
-            with self._open_api() as api:
-                for pg, image in self._iter_pages(input_path):
-                    self._set_page(api, image)
-                    api.SetPageSegMode(tesserocr.PSM.AUTO)
-                    boxes = api.GetComponentImages(tesserocr.RIL.TEXTLINE, True)
-                    api.SetPageSegMode(tesserocr.PSM.SINGLE_LINE)
-                    for i, (_, box, _, _) in enumerate(boxes):
-                        x = max(0, box['x'] - self.BOX_PADDING)
-                        y = max(0, box['y'] - self.BOX_PADDING)
-                        w = min(box['w'] + 2 * self.BOX_PADDING, image.width - x)
-                        h = min(box['h'] + 2 * self.BOX_PADDING, image.height - y)
-                        api.SetRectangle(x, y, w, h)
-                        ocr_result = api.GetUTF8Text()
-                        box_confidence = api.MeanTextConf()
-                        print(f'Item {input_path}:{pg}:{i} had a confidence score of {box_confidence}.')
-                        output.append({'content': ocr_result, 'confidence': box_confidence, 'page': pg + 1, 'block': i + 1})
-        except Exception as e:
-            stdout_logger.error(str(e))
-            # Drop the blocks already read: saving them would mark the whole file as done, so the rest of it would
-            # never be retried.
-            return []
+        with self._open_api() as api:
+            for pg, image in self._iter_pages(input_path):
+                self._set_page(api, image)
+                api.SetPageSegMode(tesserocr.PSM.AUTO)
+                boxes = api.GetComponentImages(tesserocr.RIL.TEXTLINE, True)
+                api.SetPageSegMode(tesserocr.PSM.SINGLE_LINE)
+                for i, (_, box, _, _) in enumerate(boxes):
+                    x = max(0, box['x'] - self.BOX_PADDING)
+                    y = max(0, box['y'] - self.BOX_PADDING)
+                    w = min(box['w'] + 2 * self.BOX_PADDING, image.width - x)
+                    h = min(box['h'] + 2 * self.BOX_PADDING, image.height - y)
+                    api.SetRectangle(x, y, w, h)
+                    ocr_result = api.GetUTF8Text()
+                    box_confidence = api.MeanTextConf()
+                    print(f'Item {input_path}:{pg}:{i} had a confidence score of {box_confidence}.')
+                    output.append({'content': ocr_result, 'confidence': box_confidence, 'page': pg + 1, 'block': i + 1})
+        if not any(result['content'].strip() for result in output):
+            raise NoTextFoundError(f'No recognizable text found in {input_path}.')
         return output
