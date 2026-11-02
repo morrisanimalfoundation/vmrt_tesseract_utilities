@@ -7,7 +7,7 @@ as a user that has no account in the image (as docker-compose.yml does):
 
     docker run --rm --user 1234:1234 -v "$PWD:/workspace" <image> python tests/docker_smoke_test.py
 
-It is not part of the pytest suite, which runs without Docker.
+It is not part of the pytest suite, which runs both without Docker and, in CI, inside the image.
 """
 
 import os
@@ -26,7 +26,7 @@ EXPECTED_TEXT = 'Vaccines current'
 def check_imports() -> None:
     """The PII scrubber's NLP engine needs these, and they have gone missing before (#21)."""
     import presidio_analyzer  # noqa: F401
-    import spacy_huggingface_pipelines  # noqa: F401
+    import presidio_analyzer.nlp_engine.huggingface_token_pipe  # noqa: F401
     import torch  # noqa: F401
     import transformers  # noqa: F401
 
