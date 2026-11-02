@@ -17,7 +17,10 @@ fi
 
 # Install the spacy models.
 chmod +x "${SCRIPT_DIR}/install_spacy_models.sh"
-/bin/bash "${SCRIPT_DIR}/install_spacy_models.sh"
+if ! /bin/bash "${SCRIPT_DIR}/install_spacy_models.sh"; then
+  echo "Error: Installing the spaCy models failed, so no files were scrubbed."
+  exit 1
+fi
 
 # No --threshold, so every detection is removed (the default, 0.0). Some identifiers, such as ZIP codes and
 # house numbers, score around 0.4, so a higher threshold leaves them in the text.

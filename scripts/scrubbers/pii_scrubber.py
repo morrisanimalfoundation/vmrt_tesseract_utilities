@@ -7,6 +7,7 @@ from presidio_analyzer import (AnalyzerEngine, Pattern, PatternRecognizer,
                                RecognizerResult)
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_anonymizer import AnonymizerEngine
+from sqlalchemy.pool import NullPool
 
 from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.database import (TranscriptionInput,
@@ -21,10 +22,25 @@ Leverages presidio to attempt automatic PII stripping.
 
 EXCLUDE_TYPES = frozenset(['IN_PAN'])  # Use frozenset for efficient lookups.
 
-# GRLS subject IDs (e.g. "094-012345"), including the forms they take in OCR'd text: without the dash and with an
-# extra zero-padded digit. The model's ID detections are scaled down to 0.4 by the NLP config
-# (low_confidence_score_multiplier), so matching subject IDs by pattern keeps them above any reasonable threshold.
-SUBJECT_ID_PATTERN = Pattern(name='GRLS subject ID', regex=r'(?<!\d)094-?0?\d{6}(?!\d)', score=0.9)
+# GRLS subject IDs (e.g. "094-012345"), including the forms they take in OCR'd text: a space, en dash or nothing
+# in place of the dash, a letter O read for the leading zero, and an extra zero-padded digit. The model's ID
+# detections are scaled down to 0.4 by the NLP config (low_confidence_score_multiplier), so matching subject IDs
+# by pattern keeps them above any reasonable threshold.
+SUBJECT_ID_PATTERN = Pattern(name='GRLS subject ID', regex=r'(?<!\d)[0O]94[-– ]?0?\d{6}(?!\d)', score=0.9)
+
+
+def create_subject_id_recognizer() -> PatternRecognizer:
+    """
+    Creates the pattern recognizer for GRLS subject IDs.
+
+    Subject IDs are reported as ID, the same entity type the model uses, so they are still replaced with <ID>.
+
+    Returns
+    -------
+    PatternRecognizer
+        The subject ID recognizer.
+    """
+    return PatternRecognizer(supported_entity='ID', name='GrlsSubjectIdRecognizer', patterns=[SUBJECT_ID_PATTERN])
 
 
 def create_nlp_engine(nlp_config_file: str) -> AnalyzerEngine:
@@ -54,9 +70,7 @@ def create_nlp_engine(nlp_config_file: str) -> AnalyzerEngine:
         provider = NlpEngineProvider(conf_file=nlp_config_file)
         engine = provider.create_engine()
         analyzer = AnalyzerEngine(nlp_engine=engine)
-        analyzer.registry.add_recognizer(
-            PatternRecognizer(supported_entity='ID', name='GrlsSubjectIdRecognizer', patterns=[SUBJECT_ID_PATTERN])
-        )
+        analyzer.registry.add_recognizer(create_subject_id_recognizer())
         return analyzer
 
     except Exception as e:
@@ -143,7 +157,8 @@ def process_files(process_filepath_data: list, analyzer: AnalyzerEngine,
     threshold : float
         The confidence threshold for PII detection.
     """
-    sessionmaker = get_database_session(echo=args.debug_sql)
+    # This runs once per chunk, so don't keep a pool of connections open for each one.
+    sessionmaker = get_database_session(echo=args.debug_sql, poolclass=NullPool)
     with sessionmaker() as session:
         for output_log in process_filepath_data:
             session.add(output_log)  # Ensure the instance is bound to the session
@@ -192,7 +207,8 @@ def get_files_to_process(args: argparse.Namespace) -> list:
     results: list
       The list of input files.
     """
-    sessionmaker = get_database_session(echo=args.debug_sql)
+    # This runs once per chunk, so don't keep a pool of connections open for each one.
+    sessionmaker = get_database_session(echo=args.debug_sql, poolclass=NullPool)
     # Load the rows inside the session, so closing it detaches them for process_files to attach to its own.
     with sessionmaker() as session:
         query = (session.query(TranscriptionOutput)
@@ -200,6 +216,7 @@ def get_files_to_process(args: argparse.Namespace) -> list:
                  .where(TranscriptionInput.document_type == args.document_type)
                  .where(TranscriptionOutput.ocr_output_file != None)  # noqa: E711
                  .where(TranscriptionOutput.pii_scrubber_output_file == None)  # noqa: E711
+                 .order_by(TranscriptionOutput.id)
                  .limit(args.chunk_size)
                  .offset(args.offset))
         results = query.all()
@@ -256,7 +273,11 @@ def parse_args() -> argparse.Namespace:
                         help='The target confidence threshold for scores.')
     parser.add_argument('--until-done', action='store_true',
                         help='Keep scrubbing chunks until no files are left, instead of stopping after one.')
-    return parser.parse_args(normalize_flag_spelling(sys.argv[1:]))
+    args = parser.parse_args(normalize_flag_spelling(sys.argv[1:]))
+    # The offset would be applied to every chunk, so the run would stop with that many files still unscrubbed.
+    if args.until_done and args.offset:
+        parser.error('--offset can\'t be used with --until-done, which scrubs every file.')
+    return args
 
 
 if __name__ == '__main__':

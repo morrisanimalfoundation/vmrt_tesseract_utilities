@@ -11,6 +11,7 @@ All of the data below is made up.
 
 import argparse
 import os
+import sys
 from collections import Counter
 
 import pytest
@@ -189,7 +190,8 @@ def test_recognizer_still_finds_entities(scrubbed, recognizer):
     assert recognizer in found, f'{recognizer} found nothing; recognizers that did: {sorted(found)}'
 
 
-@pytest.mark.parametrize('subject_id', ['094-012345', '094012345', '094-0012345', '0940012345'])
+@pytest.mark.parametrize('subject_id', ['094-012345', '094012345', '094-0012345', '0940012345',
+                                        '094 012345', '094–012345', 'O94-012345'])
 def test_subject_id_is_removed_at_a_raised_threshold(analyzer, subject_id):
     """
     Test that a GRLS subject ID, in each form it takes in OCR'd text, is removed even with a raised threshold.
@@ -203,7 +205,7 @@ def test_subject_id_pattern_ignores_longer_numbers(number):
     """
     Test that the subject ID pattern doesn't match inside a longer run of digits.
     """
-    recognizer = pii_scrubber.PatternRecognizer(supported_entity='ID', patterns=[pii_scrubber.SUBJECT_ID_PATTERN])
+    recognizer = pii_scrubber.create_subject_id_recognizer()
     assert recognizer.analyze(f'Ref {number} on file', entities=['ID']) == []
 
 
@@ -222,3 +224,12 @@ def test_scrub_chunks(monkeypatch, until_done, chunks_scrubbed):
     pii_scrubber.scrub_chunks(args, analyzer=None)
 
     assert scrubbed_chunks == chunks[:chunks_scrubbed]
+
+
+def test_offset_is_rejected_with_until_done(monkeypatch):
+    """
+    Test that --offset can't be combined with --until-done, which would leave that many files unscrubbed.
+    """
+    monkeypatch.setattr(sys, 'argv', ['pii_scrubber.py', 'output', '--until-done', '--offset', '10'])
+    with pytest.raises(SystemExit):
+        pii_scrubber.parse_args()

@@ -219,8 +219,14 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
   `Found 0 files to scrub`), or pass `--until-done` to step 4 to scrub every batch in one run. Step 3 skips files already completed for that replacement pass, so rerun the same command to process the next batch; no `--offset` is needed.
 - `--threshold` (step 4) is the minimum confidence score, from 0 to 1, a detection needs before it is
   removed. The default `0.0` removes everything the model flags. Raising it lets identifiers through: some,
-  such as ZIP codes and house numbers, score around 0.4. GRLS subject IDs are also matched by pattern with a
-  score of 0.9, so they are removed at any threshold up to that.
+  such as ZIP codes and house numbers, score around 0.4. GRLS subject IDs written as `094-012345` (or with a
+  space, an en dash or nothing for the dash, a letter O for the first zero, or an extra zero after the dash)
+  are also matched by pattern with a score of 0.9, so those are removed at any threshold up to that.
+- Step 4 skips files it has already scrubbed. After changing `--threshold` or updating the scrubber, files
+  scrubbed before the change keep their old output: to scrub them again, set `pii_scrubber_output_file` and
+  `pii_scrubber_confidence_file` back to `NULL` for those rows in `transcription_output` and rerun step 4. In
+  particular, `scrub_txt_files.sh` used `--threshold=0.45` until November 2026, which left subject IDs, ZIP codes
+  and house numbers in the text, so rescrub anything it processed before then.
 - `--visit-date-threshold` (step 5) is how many days apart a date in the text and a known visit date can be
   and still count as a match. The default is 3.
 - `--search-unstructured-text-dir` (step 5) also searches the raw OCR text for dates, not only the PII
