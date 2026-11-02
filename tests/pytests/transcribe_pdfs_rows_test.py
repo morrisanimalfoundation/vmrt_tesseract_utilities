@@ -93,6 +93,8 @@ def test_every_ocr_result_has_its_own_database_row(
         else transcribe_pdfs.TesseractOperationBlock
     )
     monkeypatch.setattr(operation, 'process_row', fake_process_row)
+    # OCR is faked, so skip the check that poppler and Tesseract are installed.
+    monkeypatch.setattr(transcribe_pdfs, 'check_ocr_setup', lambda: None)
     monkeypatch.setattr(
         transcribe_pdfs, 'get_database_session',
         lambda **kwargs: sessionmaker(engine),
@@ -100,7 +102,7 @@ def test_every_ocr_result_has_its_own_database_row(
 
     args = argparse.Namespace(
         output_to=str(tmp_path), document_type=mode,
-        chunk_size=10, offset=0, debug_sql=False,
+        chunk_size=10, offset=0, retry_failed=False, debug_sql=False,
     )
     transcribe_pdfs.run_tesseract(args)
 
