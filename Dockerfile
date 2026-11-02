@@ -1,4 +1,7 @@
-FROM python:3.11
+# The slim image has no compilers or C headers. Every package in requirements.txt has a prebuilt wheel for
+# both linux/amd64 and linux/arm64, so none are needed, and leaving them out keeps their vulnerabilities (such as
+# kernel header CVEs in linux-libc-dev) out of the image. Check that before adding a package without wheels.
+FROM python:3.11-slim
 # Links the published image on ghcr.io to this repository.
 LABEL org.opencontainers.image.source=https://github.com/morrisanimalfoundation/vmrt_tesseract_utilities
 ENV PYTHONPATH=\/workspace
@@ -7,12 +10,13 @@ ENV PIP_NO_CACHE_DIR=1
 # Only the English and orientation models are needed: the OCR code uses Tesseract's default language.
 # Cloning the whole tesseract-ocr/tessdata repository would add about 2 GB of other languages.
 ARG TESSDATA_COMMIT=ced78752cc61322fb554c280d13360b35b8684e4
-# The upgrade installs Debian security fixes released since the python:3.11 base image was last rebuilt. The options
-# keep the build from stopping to ask about a changed config file, which would fail with no one to answer.
+# The upgrade installs Debian security fixes released since the python:3.11-slim base image was last rebuilt. The
+# options keep the build from stopping to ask about a changed config file, which would fail with no one to answer.
+# poppler-utils is used by pdf2image and yq by install_spacy_models.sh. curl is only needed to download the
+# Tesseract models, so it's removed again in the same step.
 RUN apt-get update -y && \
     DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade && \
-    apt-get -y install poppler-utils tesseract-ocr yq build-essential libopenblas-dev libomp-dev && \
-    rm -rf /var/lib/apt/lists/* && \
+    apt-get -y install --no-install-recommends poppler-utils tesseract-ocr yq curl && \
     mkdir -p /usr/share/tessdata && \
     for model in eng osd; do \
       curl -fsSL --retry 3 -o /usr/share/tessdata/$model.traineddata \
@@ -21,7 +25,9 @@ RUN apt-get update -y && \
     printf '%s  %s\n' \
       daa0c97d651c19fba3b25e81317cd697e9908c8208090c94c3905381c23fc047 /usr/share/tessdata/eng.traineddata \
       e19f2ae860792fdf372cf48d8ce70ae5da3c4052962fe22e9de1f680c374bb0e /usr/share/tessdata/osd.traineddata \
-      | sha256sum -c -
+      | sha256sum -c - && \
+    apt-get -y purge --auto-remove curl && \
+    rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 # The import check fails the build if the PII scrubber's dependencies are ever dropped from requirements.txt.
 RUN pip install -r requirements.txt &&\

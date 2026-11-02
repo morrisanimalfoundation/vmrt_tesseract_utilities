@@ -130,7 +130,7 @@ subject ID are skipped.
 ./run.sh
 ```
 
-The first run downloads the prebuilt workspace image (about 1.4 GB) and the MySQL image, which takes a few
+The first run downloads the prebuilt workspace image (about 1 GB) and the MySQL image, which takes a few
 minutes depending on your connection. Later runs only download what has changed. When it finishes you will see
 a new prompt that looks something like this:
 
