@@ -183,7 +183,7 @@ tqdm==4.67.1
     #   huggingface-hub
     #   spacy
     #   transformers
-transformers==4.57.6
+transformers==5.10.1
     # via
     #   presidio-analyzer
     #   spacy-huggingface-pipelines
