@@ -47,8 +47,11 @@ class TesseractOperationBase(ABC):
             images = pdf2image.convert_from_path(input_path, first_page=pg + 1, last_page=pg + 1)
             image = images[0]
             del images
-            yield pg, image
-            image.close()
+            try:
+                yield pg, image
+            finally:
+                # Also runs if the caller stops part way through, e.g. because OCR on this page failed.
+                image.close()
 
     @staticmethod
     def _open_api() -> tesserocr.PyTessBaseAPI:
@@ -119,6 +122,9 @@ class TesseractOperationPage(TesseractOperationBase):
                     output.append({'content': ocr_result, 'confidence': page_confidence, 'page': pg + 1, 'block': 0})
         except Exception as e:
             stdout_logger.error(str(e))
+            # Drop the pages already read: saving them would mark the whole file as done, so the rest of it would
+            # never be retried.
+            return []
         return output
 
 
@@ -154,4 +160,7 @@ class TesseractOperationBlock(TesseractOperationBase):
                         output.append({'content': ocr_result, 'confidence': box_confidence, 'page': pg + 1, 'block': i + 1})
         except Exception as e:
             stdout_logger.error(str(e))
+            # Drop the blocks already read: saving them would mark the whole file as done, so the rest of it would
+            # never be retried.
+            return []
         return output

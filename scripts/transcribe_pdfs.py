@@ -53,6 +53,31 @@ def _write_file(output_path: str, data: str) -> None:
         f.write(data)
 
 
+def _output_path(base_path: str, db_input: TranscriptionInput, ocr_result: dict) -> str:
+    """
+    Builds the path of the text file for one OCR result.
+
+    The name starts with the input's id, so PDFs with the same file name in different folders (such as two
+    dogs' "Medical Records.pdf") don't overwrite each other's text.
+
+    Parameters
+    ----------
+    base_path: str
+      The output directory.
+    db_input: TranscriptionInput
+      The input the result came from.
+    ocr_result: dict
+      The OCR result, with its page and block numbers.
+
+    Returns
+    -------
+    output_path: str
+      The path to write the result to.
+    """
+    name = os.path.splitext(os.path.basename(db_input.input_file))[0]
+    return f'{base_path}/{db_input.id}-{name}-{ocr_result["page"]}-{ocr_result["block"]}.txt'
+
+
 def run_tesseract(args: argparse.Namespace) -> None:
     """
     Runs a Tesseract strategy over the pages of a PDF.
@@ -84,6 +109,8 @@ def run_tesseract(args: argparse.Namespace) -> None:
                  .where(func.lower(TranscriptionInput.input_file).like('%.pdf'))
                  .where(TranscriptionInput.document_type == args.document_type)
                  .where(TranscriptionOutput.ocr_output_file == None)  # noqa: E711
+                 # Without an order, which rows --offset skips isn't defined and can change between runs.
+                 .order_by(TranscriptionInput.id, TranscriptionOutput.id)
                  .limit(args.chunk_size)
                  .offset(args.offset))
         count = query.count()
@@ -92,8 +119,7 @@ def run_tesseract(args: argparse.Namespace) -> None:
             db_output_logs = []
             output = op.process_row(db_input.input_file)
             for ocr_result in output:
-                bits = os.path.splitext(os.path.basename(db_input.input_file))
-                output_path = f'{base_path}/{bits[0]}-{ocr_result["page"]}-{ocr_result["block"]}.txt'
+                output_path = _output_path(base_path, db_input, ocr_result)
                 _write_file(output_path, ocr_result['content'])
                 # Each page or block gets its own row; an existing empty row is filled by the first one.
                 if db_output is None:
