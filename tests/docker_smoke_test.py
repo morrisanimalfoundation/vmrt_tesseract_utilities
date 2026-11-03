@@ -16,8 +16,8 @@ import tempfile
 
 import spacy
 import yaml
-from PIL import Image, ImageDraw, ImageFont
 
+from tests.synthetic_pdfs import SyntheticPage, write_pdf
 from vmrt_tesseract_utilities.tesseract_operations import TesseractOperationDoc
 
 EXPECTED_TEXT = 'Vaccines current'
@@ -42,11 +42,7 @@ def check_spacy_models() -> None:
 
 def check_ocr(workdir: str) -> None:
     """Poppler, Tesseract and the English model work together on a generated PDF."""
-    image = Image.new('L', (1700, 600), 'white')
-    font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 48)
-    ImageDraw.Draw(image).text((100, 250), f'{EXPECTED_TEXT}, weight 32 kg.', fill='black', font=font)
-    pdf_path = os.path.join(workdir, 'smoke.pdf')
-    image.save(pdf_path, 'PDF', resolution=200)
+    pdf_path = write_pdf(os.path.join(workdir, 'smoke.pdf'), [SyntheticPage([f'{EXPECTED_TEXT}, weight 32 kg.'])])
 
     output = TesseractOperationDoc().process_row(pdf_path)
     if not output or EXPECTED_TEXT not in output[0]['content']:

@@ -14,6 +14,8 @@ Provides Tesseract processing with different output scales (document, page, bloc
 """
 
 TESSDATA_PATH = '/usr/share/tessdata'
+# The models Tesseract needs: English text, and orientation and script detection (osd) for rotated pages.
+TESSDATA_MODELS = ('eng', 'osd')
 
 
 class NoTextFoundError(Exception):
@@ -42,7 +44,7 @@ def check_ocr_setup(tessdata_path: str = TESSDATA_PATH) -> None:
     Raises
     ------
     OcrSetupError
-      If poppler isn't installed, or Tesseract can't start with the given tessdata.
+      If poppler isn't installed, a Tesseract model is missing, or Tesseract can't start with the given tessdata.
     """
     missing = [tool for tool in ('pdfinfo', 'pdftoppm') if shutil.which(tool) is None]
     if missing:
@@ -50,6 +52,11 @@ def check_ocr_setup(tessdata_path: str = TESSDATA_PATH) -> None:
                             'pdf2image needs it to read PDFs.')
     if not os.path.isdir(tessdata_path):
         raise OcrSetupError(f'Tesseract data directory {tessdata_path} does not exist.')
+    # Without the osd model, Tesseract only warns and reads rotated pages as garbage, so check for it here.
+    missing = [model for model in TESSDATA_MODELS
+               if not os.path.isfile(os.path.join(tessdata_path, f'{model}.traineddata'))]
+    if missing:
+        raise OcrSetupError(f'Tesseract model(s) {", ".join(missing)} missing from {tessdata_path}.')
     try:
         with tesserocr.PyTessBaseAPI(tessdata_path):
             pass
@@ -111,12 +118,18 @@ class TesseractOperationBase(ABC):
         """
         Opens a Tesseract instance, to be reused for every page of one file.
 
+        Notes
+        -----
+        The page segmentation mode is AUTO_OSD, which detects each page's orientation first and turns it upright.
+        In the default mode (AUTO), pages scanned upside down or turned 90 degrees counter-clockwise came out as
+        garbage. tests/pytests/ocr_accuracy_test.py checks every orientation.
+
         Returns
         -------
         api: tesserocr.PyTessBaseAPI
           The Tesseract instance; use it as a context manager so it is closed afterwards.
         """
-        api = tesserocr.PyTessBaseAPI(TESSDATA_PATH)
+        api = tesserocr.PyTessBaseAPI(TESSDATA_PATH, psm=tesserocr.PSM.AUTO_OSD)
         api.SetVariable('debug_file', '/dev/null')
         return api
 

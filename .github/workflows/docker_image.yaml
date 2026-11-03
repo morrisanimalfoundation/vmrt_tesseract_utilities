@@ -77,7 +77,7 @@ jobs:
 
       # One build is both loaded for the tests below and, on main, pushed by digest, so the published image is
       # exactly the one that was tested. It is only tagged (in the publish job) if every step here passes, apart
-      # from a failure of the unit tests on the weekly run (see below).
+      # from a failure of the unit or pipeline tests on the weekly run (see below).
       - name: Build
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -128,6 +128,23 @@ jobs:
             echo "::error::Some tests were skipped or expected to fail inside the image. Every test should run there."
             exit 1
           fi
+
+      # Runs the five pipeline steps from the README in document and page mode against a real MySQL database, and
+      # checks every step's results, since the steps hand their work to each other through the database
+      # (tests/pipeline_test.py). MySQL runs the way docker-compose.yml runs it. It's started with docker run rather
+      # than as a service container, because a service container can't be given mysqld's options. The checkout is
+      # mounted read-only, so the test can't depend on writing to it. Like the unit tests, a failure on the weekly
+      # run doesn't block publishing.
+      - name: Pipeline test
+        continue-on-error: ${{ github.event_name == 'schedule' }}
+        run: |
+          docker network create vmrt-pipeline-test
+          docker run -d --name vmrt-pipeline-mysql --network vmrt-pipeline-test \
+            -e MYSQL_ROOT_PASSWORD=test -e MYSQL_DATABASE=vmrt_emr_transcription \
+            mysql:8.0 --default-authentication-plugin=mysql_native_password
+          docker run --rm --user 1234:1234 --network vmrt-pipeline-test -v "$PWD:/workspace:ro" \
+            -e SQL_CONNECTION_STRING=mysql+pymysql://root:test@vmrt-pipeline-mysql:3306/vmrt_emr_transcription \
+            vmrt-workspace:test python tests/pipeline_test.py
 
       # Pull requests fail on a critical vulnerability that already has a fix. Published images are scanned in the
       # scan job instead, so a new finding never holds back the weekly base image security updates.

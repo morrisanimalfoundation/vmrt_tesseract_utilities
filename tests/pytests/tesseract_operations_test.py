@@ -14,12 +14,10 @@ pdf2image = pytest.importorskip('pdf2image')
 if shutil.which('pdfinfo') is None or not os.path.isdir('/usr/share/tessdata'):
     pytest.skip('poppler or the Tesseract models are not installed', allow_module_level=True)
 
-from PIL import Image, ImageDraw, ImageFont  # noqa: E402
-
+from tests.synthetic_pdfs import SyntheticPage, write_pdf  # noqa: E402
 from vmrt_tesseract_utilities.tesseract_operations import (  # noqa: E402
     TesseractOperationBlock, TesseractOperationDoc, TesseractOperationPage)
 
-FONT_PATH = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
 PAGE_LINES = [
     ['Vaccines current', 'Weight 32 kg'],
     ['Heart rate normal', 'Teeth cleaned'],
@@ -32,17 +30,8 @@ def pdf_path(tmp_path_factory) -> str:
     """
     Writes a three page PDF of synthetic text, one line of text per `PAGE_LINES` entry.
     """
-    font = ImageFont.truetype(FONT_PATH, 48)
-    pages = []
-    for lines in PAGE_LINES:
-        image = Image.new('RGB', (1700, 2200), 'white')
-        draw = ImageDraw.Draw(image)
-        for i, line in enumerate(lines):
-            draw.text((150, 200 + i * 150), line, fill='black', font=font)
-        pages.append(image)
     path = str(tmp_path_factory.mktemp('ocr') / 'synthetic.pdf')
-    pages[0].save(path, 'PDF', resolution=200, save_all=True, append_images=pages[1:])
-    return path
+    return write_pdf(path, [SyntheticPage(lines) for lines in PAGE_LINES])
 
 
 def test_document_mode(pdf_path):
