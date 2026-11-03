@@ -36,8 +36,24 @@ RUN pip install --only-binary=:all: -r requirements.txt && \
     python -c "import torch, transformers, presidio_analyzer.nlp_engine.huggingface_token_pipe" && \
     python -m spacy download en_core_web_sm && \
     python -m spacy download en_core_web_lg
+# The PII scrubber's model, pinned to one revision so its scrubbing only changes when this pin does. Presidio's NLP
+# config can't set a revision, so the model is downloaded here into a fixed folder, which
+# scripts/scrubbers/config/stanford-deidentifier-base_nlp.yaml points at, and the weights are checked against their
+# SHA-256 (from Hugging Face's file page for that revision). HF_HUB_OFFLINE stops anything from being fetched from
+# Hugging Face at run time, so the scrubber works without internet and fails rather than downloading a different
+# model. To update the pin, see "Updating the PII scrubber's model" in the README.
+ARG SCRUBBER_MODEL=StanfordAIMI/stanford-deidentifier-base
+ARG SCRUBBER_MODEL_REVISION=661b9c1c717d3165512d440abc3700c386aefab6
+ARG SCRUBBER_MODEL_SHA256=fa49ef069171e479f546ce2ee5ed599aa585d1d33bc7a8f54400ac57d9cd2716
+ARG SCRUBBER_MODEL_DIR=/opt/models/stanford-deidentifier-base
+RUN python -c "import sys; from huggingface_hub import snapshot_download; snapshot_download(sys.argv[1], revision=sys.argv[2], local_dir=sys.argv[3])" \
+      "$SCRUBBER_MODEL" "$SCRUBBER_MODEL_REVISION" "$SCRUBBER_MODEL_DIR" && \
+    printf '%s  %s\n' "$SCRUBBER_MODEL_SHA256" "$SCRUBBER_MODEL_DIR/pytorch_model.bin" | sha256sum -c - && \
+    rm -rf "$SCRUBBER_MODEL_DIR/.cache" && \
+    echo "$SCRUBBER_MODEL@$SCRUBBER_MODEL_REVISION" > "$SCRUBBER_MODEL_DIR/REVISION"
+ENV HF_HUB_OFFLINE=1
 # The container runs as the host user (see docker-compose.yml), which has no account in the image, so give
-# it a writable home for caches such as the Hugging Face model download, a name for tools that ask, and a
+# it a writable home for caches and `pip install --user`, a name for tools that ask, and a
 # prompt that doesn't say "I have no name!".
 RUN mkdir -m 1777 /home/vmrt && \
     echo 'PS1="vmrt@\h:\w\$ "' >> /etc/bash.bashrc

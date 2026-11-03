@@ -187,7 +187,8 @@ Once no files are left to process, the script also checks that every file alread
 The script exits with code 0 when everything succeeded, 3 when it finished but some files failed or are missing, and 1 if it couldn't run at all. A scheduler such as Jenkins can tell 3 apart from a crash, but **don't start step 4 until every replacement pass exits with 0**: a failed file still contains the strings the pass should have replaced, and step 4 would scrub and save it anyway, with no later chance to remove them.
 
 **4. Scrub PII** — uses an NLP model to find and remove names, addresses, phone numbers, and similar. The
-first time you run this in a session it downloads the model, which needs an internet connection.
+model is built into the image at a pinned version, so no internet connection is needed (see **Updating the PII
+scrubber's model** below).
 
 ```bash
 python scripts/scrubbers/pii_scrubber.py /workspace/output
@@ -407,6 +408,12 @@ rather than with `git add .`, so nothing extra is swept in.
   pytest
   ```
   Run a single test with `pytest tests/pytests/string_replacer_test.py::test_replace_single_string`.
+- **Coverage**: add `--cov` to any pytest command to see which lines no test runs (configured in
+  `pyproject.toml`; it covers `vmrt_tesseract_utilities/` and `scripts/`), for example `pytest --cov`. The
+  `Missing` column lists the line numbers. Outside the image the tests that need the image's packages are
+  skipped, so their code shows as not covered; run it inside the image (the `docker run` command below, with
+  `--cov` added) for the real numbers. CI does that and shows the per-file totals in each `Docker Image` run's
+  summary. There is no minimum yet.
 - **Linting**: `./sort_and_lint.sh` runs `isort` and `flake8` (line length is not enforced). Install
   dependencies first with `pip install -r requirements/ci_requirements.txt`.
 - Both checks run automatically on every pull request to `main`. Pull requests that change code, tests, or the
@@ -452,6 +459,19 @@ rather than with `git add .`, so nothing extra is swept in.
   version that still fits, so always regenerate the file with the command above.
   `requirements/pytest_requirements.txt` pins only the test tools and takes every other version from
   `requirements.txt`, so a version change there applies to the tests too.
+- **Updating the PII scrubber's model**: the image contains one fixed revision of the
+  `StanfordAIMI/stanford-deidentifier-base` model from Hugging Face, so the scrubber only changes when we choose,
+  and it never downloads anything at run time (`HF_HUB_OFFLINE=1`). To move to a newer revision on purpose:
+  1. On the model's Hugging Face page, open **Files and versions**, pick the commit and copy its full hash.
+  2. Open `pytorch_model.bin` at that commit and copy its SHA-256.
+  3. Set `SCRUBBER_MODEL_REVISION` and `SCRUBBER_MODEL_SHA256` in `Dockerfile`, build with `./run.sh --build`
+     and run the tests inside the image (see above).
+  4. If `tests/pytests/pii_scrubber_test.py` fails, check whether the new revision scrubs worse (identifiers
+     that leak, medical text removed) before updating `BASELINE_COUNTS` and the revision named next to it.
+
+  The scrubber's config (`scripts/scrubbers/config/stanford-deidentifier-base_nlp.yaml`) points at the folder the
+  model is saved in, so it needs an image built from this repository's `Dockerfile` of November 2026 or later.
+  `./run.sh` pulls the latest image every time it starts.
 
 ## License
 

@@ -4,7 +4,8 @@ Tests for the `pii_scrubber` script, run against the real Presidio analyzer and 
 A package update (presidio, transformers, spaCy, torch) can make the scrubber miss personal information without
 anything crashing, so these tests check what it removes, what it keeps, and how much it finds. They need the
 scrubber's packages, which are only installed in the workspace image, so they are skipped elsewhere. In CI they
-run inside the image, where skipped tests fail the build. The first run downloads the model (about 400 MB).
+run inside the image, where skipped tests fail the build. The model is the pinned copy in the image, so no
+internet connection is needed.
 
 All of the data below is made up.
 """
@@ -85,8 +86,8 @@ MEDICAL_TEXT = [
 ]
 
 # Detections per entity type in RECORD, recorded with the package versions in requirements.txt and revision
-# 661b9c1c717d3165512d440abc3700c386aefab6 of the StanfordAIMI/stanford-deidentifier-base model, which the image
-# doesn't pin yet: a new model revision on Hugging Face can change these. Low-scoring types that only fire on parts
+# 661b9c1c717d3165512d440abc3700c386aefab6 of the StanfordAIMI/stanford-deidentifier-base model, the one the image
+# pins (see the Dockerfile). Updating the pin can change these. Low-scoring types that only fire on parts
 # of other entities (URL inside the email address, US_SSN and US_DRIVER_LICENSE on the subject ID) are left out
 # because they are noise, not what we rely on.
 BASELINE_COUNTS = {

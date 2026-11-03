@@ -4,7 +4,8 @@ models:
     lang_code: en
     model_name:
       spacy: en_core_web_sm
-      transformers: StanfordAIMI/stanford-deidentifier-base
+      # StanfordAIMI/stanford-deidentifier-base, pinned and downloaded into the image by the Dockerfile.
+      transformers: /opt/models/stanford-deidentifier-base
 
 ner_model_configuration:
   labels_to_ignore:
