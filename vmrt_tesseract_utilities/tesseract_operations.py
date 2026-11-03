@@ -62,6 +62,13 @@ def check_ocr_setup(tessdata_path: str = TESSDATA_PATH) -> None:
             pass
     except RuntimeError as e:
         raise OcrSetupError(f'Tesseract could not start with the data in {tessdata_path}: {e}') from e
+    # The default start-up doesn't load the osd model, and OCR only warns if it can't, so load it on its own: a
+    # truncated or corrupt osd.traineddata fails here instead of quietly turning rotated pages into garbage.
+    try:
+        with tesserocr.PyTessBaseAPI(tessdata_path, lang='osd', psm=tesserocr.PSM.OSD_ONLY):
+            pass
+    except RuntimeError as e:
+        raise OcrSetupError(f'Tesseract could not load the osd model in {tessdata_path}: {e}') from e
 
 
 class TesseractOperationBase(ABC):

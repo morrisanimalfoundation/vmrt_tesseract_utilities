@@ -131,6 +131,25 @@ def test_check_ocr_setup_missing_osd_model(monkeypatch):
         check_ocr_setup()
 
 
+def test_check_ocr_setup_unreadable_osd_model(monkeypatch):
+    """
+    Test that an osd model Tesseract can't load (e.g. a truncated download) stops the run, since the default start-up
+    doesn't load it.
+
+    Asserts:
+        OcrSetupError names the osd model.
+    """
+    def tess_api(path, lang='eng', **kwargs):
+        if lang == 'osd':
+            raise RuntimeError('Failed to init API, possibly an invalid tessdata path')
+        return mock.MagicMock()
+
+    _fake_setup(monkeypatch)
+    monkeypatch.setattr(tesseract_operations.tesserocr, 'PyTessBaseAPI', tess_api)
+    with pytest.raises(OcrSetupError, match='could not load the osd model'):
+        check_ocr_setup()
+
+
 def test_check_ocr_setup_invalid_tessdata(monkeypatch):
     """
     Test that tessdata Tesseract can't start with (e.g. no language files) stops the run.

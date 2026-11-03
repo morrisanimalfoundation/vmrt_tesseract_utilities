@@ -53,6 +53,13 @@ class SyntheticPage:
 
         >>> SyntheticPage(['Exam', ('Rabies', '03/14/2023')]).text
         'Exam\\nRabies 03/14/2023'
+
+        The checks in `render` stop a test from expecting text that isn't on the page:
+
+        >>> SyntheticPage([('a', 'b', 'c', 'd')]).render()
+        Traceback (most recent call last):
+            ...
+        ValueError: Table row ('a', 'b', 'c', 'd') has more cells than the 3 columns.
         """
         return '\n'.join(' '.join(line) if isinstance(line, tuple) else line for line in self.lines)
 
@@ -64,6 +71,12 @@ class SyntheticPage:
         -------
         Image.Image
             The page image, landscape if rotated by 90 or 270 degrees.
+
+        Raises
+        ------
+        ValueError
+            If some of the text wouldn't be drawn (a table row with more cells than columns, or text running off the
+            page), since `text` would then include words the page doesn't have.
         """
         image = Image.new('RGB', PAGE_SIZE, 'white')
         draw = ImageDraw.Draw(image)
@@ -71,8 +84,20 @@ class SyntheticPage:
         line_height = int(self.font_size * 1.6)
         for i, line in enumerate(self.lines):
             y = TOP_MARGIN + i * line_height
-            cells = line if isinstance(line, tuple) else (line,)
-            for x, cell in zip(COLUMN_POSITIONS if isinstance(line, tuple) else (LEFT_MARGIN,), cells):
+            if y + line_height > PAGE_SIZE[1]:
+                raise ValueError(f'Line {i + 1} ({line!r}) runs off the bottom of the page.')
+            if isinstance(line, tuple):
+                if len(line) > len(COLUMN_POSITIONS):
+                    raise ValueError(f'Table row {line!r} has more cells than the {len(COLUMN_POSITIONS)} columns.')
+                cells = list(zip(COLUMN_POSITIONS, line))
+            else:
+                cells = [(LEFT_MARGIN, line)]
+            for column, (x, cell) in enumerate(cells):
+                # A cell ends where the next column starts, and the last one at the page edge.
+                right = COLUMN_POSITIONS[column + 1] if isinstance(line, tuple) and column + 1 < len(cells) \
+                    else PAGE_SIZE[0]
+                if x + font.getlength(cell) > right:
+                    raise ValueError(f'{cell!r} is too wide for its space on the page.')
                 draw.text((x, y), cell, fill='black', font=font)
         if self.rotation:
             image = image.rotate(self.rotation, expand=True, fillcolor='white')

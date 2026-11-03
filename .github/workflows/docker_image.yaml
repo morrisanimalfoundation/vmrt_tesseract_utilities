@@ -95,6 +95,16 @@ jobs:
           cache-from: type=gha,scope=${{ env.PLATFORM_SLUG }}
           cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_SLUG }}
 
+      # MySQL for the pipeline test (below), started here so its first start-up, which takes a while, overlaps the
+      # smoke and unit tests. It runs the way docker-compose.yml runs it. It's started with docker run rather than
+      # as a service container, because a service container can't be given mysqld's options.
+      - name: Start MySQL for the pipeline test
+        run: |
+          docker network create vmrt-pipeline-test
+          docker run -d --name vmrt-pipeline-mysql --network vmrt-pipeline-test \
+            -e MYSQL_ROOT_PASSWORD=test -e MYSQL_DATABASE=vmrt_emr_transcription \
+            mysql:8.0 --default-authentication-plugin=mysql_native_password
+
       - name: Smoke test
         run: docker run --rm --user 1234:1234 -v "$PWD:/workspace" vmrt-workspace:test python tests/docker_smoke_test.py
 
@@ -131,20 +141,27 @@ jobs:
 
       # Runs the five pipeline steps from the README in document and page mode against a real MySQL database, and
       # checks every step's results, since the steps hand their work to each other through the database
-      # (tests/pipeline_test.py). MySQL runs the way docker-compose.yml runs it. It's started with docker run rather
-      # than as a service container, because a service container can't be given mysqld's options. The checkout is
-      # mounted read-only, so the test can't depend on writing to it. Like the unit tests, a failure on the weekly
-      # run doesn't block publishing.
+      # (tests/pipeline_test.py). The test waits for MySQL to finish starting. The checkout is mounted read-only, so
+      # the test can't depend on writing to it. Like the unit tests, a failure on the weekly run doesn't block
+      # publishing.
       - name: Pipeline test
+        id: pipeline
         continue-on-error: ${{ github.event_name == 'schedule' }}
         run: |
-          docker network create vmrt-pipeline-test
-          docker run -d --name vmrt-pipeline-mysql --network vmrt-pipeline-test \
-            -e MYSQL_ROOT_PASSWORD=test -e MYSQL_DATABASE=vmrt_emr_transcription \
-            mysql:8.0 --default-authentication-plugin=mysql_native_password
           docker run --rm --user 1234:1234 --network vmrt-pipeline-test -v "$PWD:/workspace:ro" \
             -e SQL_CONNECTION_STRING=mysql+pymysql://root:test@vmrt-pipeline-mysql:3306/vmrt_emr_transcription \
             vmrt-workspace:test python tests/pipeline_test.py
+
+      # MySQL's own log explains a database that never came up, which the pipeline test can only report as a
+      # connection error. The container is removed either way, so its port and memory are free for later steps.
+      - name: Stop MySQL
+        if: always()
+        run: |
+          if [ "${{ steps.pipeline.outcome }}" = failure ]; then
+            docker logs --tail 100 vmrt-pipeline-mysql || true
+          fi
+          docker rm -f vmrt-pipeline-mysql || true
+          docker network rm vmrt-pipeline-test || true
 
       # Pull requests fail on a critical vulnerability that already has a fix. Published images are scanned in the
       # scan job instead, so a new finding never holds back the weekly base image security updates.

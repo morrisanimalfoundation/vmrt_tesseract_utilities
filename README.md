@@ -163,7 +163,9 @@ python scripts/create_transcription_process.py /data
 
 **2. Run OCR** — runs Tesseract over the queued PDFs. This is the slow step. Pages scanned sideways or upside
 down are turned upright first. Before November 2026, pages upside down or turned 90 degrees counter-clockwise
-came out as garbage, so run OCR again on anything processed before then.
+came out as garbage, and every later step worked from that text. To redo records processed before then, start
+over from step 1 with a fresh database, as `./run.sh` does each time it starts. In a database you kept, steps 2
+to 5 skip the files they have already processed, so running them again changes nothing.
 
 ```bash
 python scripts/transcribe_pdfs.py /workspace/output

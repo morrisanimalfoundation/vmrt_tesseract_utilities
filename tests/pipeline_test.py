@@ -12,7 +12,7 @@ Run it inside the workspace image, with SQL_CONNECTION_STRING pointing at an emp
     docker network create vmrt-pipeline-test
     docker run -d --name vmrt-pipeline-mysql --network vmrt-pipeline-test -e MYSQL_ROOT_PASSWORD=test \\
         -e MYSQL_DATABASE=vmrt_emr_transcription mysql:8.0 --default-authentication-plugin=mysql_native_password
-    docker run --rm --user 1234:1234 --network vmrt-pipeline-test -v "$PWD:/workspace" \\
+    docker run --rm --user 1234:1234 --network vmrt-pipeline-test -v "$PWD:/workspace:ro" \\
         -e SQL_CONNECTION_STRING=mysql+pymysql://root:test@vmrt-pipeline-mysql:3306/vmrt_emr_transcription \\
         <image> python tests/pipeline_test.py
 
@@ -33,7 +33,7 @@ from typing import List, Set, Tuple
 import sqlalchemy
 
 from tests.synthetic_pdfs import SyntheticPage, write_pdf
-from vmrt_tesseract_utilities.database import (TranscriptionInput,
+from vmrt_tesseract_utilities.database import (Base, TranscriptionInput,
                                                TranscriptionMetadata,
                                                TranscriptionOutput,
                                                get_database_session)
@@ -58,10 +58,13 @@ class Record:
         The pages.
     visit_dates : Set[Tuple[str, str]]
         The (visit date from vet_visits.tsv, date written in the record) pairs the miner should find, as ISO dates.
+    ocr_must_read : List[str]
+        Other text that must be in the record's OCR output, such as the text of a page scanned sideways.
     """
     filename: str
     pages: List[SyntheticPage]
     visit_dates: Set[Tuple[str, str]]
+    ocr_must_read: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -122,11 +125,11 @@ def make_dogs() -> List[Dog]:
                 'Radiographs of the left stifle: no fracture seen.',
                 'Plan: Rest and recheck if not improved.',
             ], font_size=31),
-            # Scanned sideways, as some real pages are.
+            # Scanned sideways, as some real pages are. OCR must turn it upright to read it.
             SyntheticPage([
                 'Discharge: carprofen 75 mg by mouth twice daily.',
             ], font_size=31, rotation=90),
-        ], {('2023-07-02', '2023-07-02')}),
+        ], {('2023-07-02', '2023-07-02')}, ocr_must_read=['carprofen 75 mg by mouth twice daily']),
     ]
     return [biscuit, juniper]
 
@@ -185,17 +188,18 @@ def wait_for_database() -> None:
 
 def check_database_is_empty() -> None:
     """
-    Stops the test if the database already has pipeline data, so it can't mix with or be mistaken for real data.
+    Stops the test if any pipeline table already has rows, so earlier data can't mix with the test's or be mistaken
+    for real data.
     """
     engine = get_database_session().kw['bind']
-    if not sqlalchemy.inspect(engine).has_table(TranscriptionInput.__tablename__):
-        return
+    inspector = sqlalchemy.inspect(engine)
     with engine.connect() as connection:
-        count = connection.execute(sqlalchemy.select(sqlalchemy.func.count()).select_from(
-            TranscriptionInput.__table__)).scalar()
-    if count:
-        sys.exit(f'The database already has {count} transcription_input rows. Run this test against an empty '
-                 f'database only.')
+        counts = {table.name: connection.execute(sqlalchemy.select(sqlalchemy.func.count()).select_from(table)).scalar()
+                  for table in Base.metadata.sorted_tables if inspector.has_table(table.name)}
+    nonempty = {name: count for name, count in counts.items() if count}
+    if nonempty:
+        sys.exit(f'The database already has data ({", ".join(f"{n}: {c} rows" for n, c in nonempty.items())}). Run '
+                 f'this test against an empty database only.')
 
 
 def run(*command: str) -> None:
@@ -258,6 +262,7 @@ def check_results(document_type: str, dogs: List[Dog], data_dir: str) -> List[st
                 problems.append(f'{name}: {len(outputs)} outputs, expected {expected_outputs}')
             for output in outputs:
                 problems.extend(check_output(f'{name} output {output.id}', output, dog))
+            problems.extend(check_ocr_read(name, outputs, dog, record))
 
             # The visit dates the miner matched, ignoring the registration row that has none.
             found = {(m.visit_date.date().isoformat(), m.extracted_date.date().isoformat())
@@ -271,6 +276,19 @@ def check_results(document_type: str, dogs: List[Dog], data_dir: str) -> List[st
             if subject_ids != {dog.subject_id}:
                 problems.append(f'{name}: metadata subject IDs {subject_ids}, expected {dog.subject_id}')
     return problems
+
+
+def check_ocr_read(name: str, outputs: List[TranscriptionOutput], dog: Dog, record: Record) -> List[str]:
+    """
+    Checks that OCR read the record's identifiers and other key text. Otherwise the checks that steps 3 and 4
+    removed the identifiers would pass without testing anything, for example if OCR misread a name.
+    """
+    record_text = '\n'.join(page.text for page in record.pages)
+    identifiers = [dog.subject_id, dog.call_name] + [i for i in SCRUBBED_IDENTIFIERS if i in record_text]
+    ocr_text = ' '.join(' '.join(read_file(o.ocr_output_file).split())
+                        for o in outputs if o.ocr_output_file and os.path.isfile(o.ocr_output_file))
+    return [f'{name}: OCR did not read {text!r}' for text in identifiers + record.ocr_must_read
+            if text not in ocr_text]
 
 
 def check_output(name: str, output: TranscriptionOutput, dog: Dog) -> List[str]:
