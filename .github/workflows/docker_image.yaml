@@ -23,6 +23,7 @@ on:
       - requirements.txt
       - requirements/pytest_requirements.txt
       - pytest.ini
+      - pyproject.toml
       - scripts/**
       - tests/**
       - vmrt_tesseract_utilities/**
@@ -101,14 +102,28 @@ jobs:
       # installed there (such as the PII scrubber's) run too. Every test must run here, so the step fails if any
       # is skipped or expected to fail. On the weekly run a failure only shows as a warning on a green run and doesn't
       # block publishing, so the base image security updates still go out.
+      # The run also measures test coverage (configured in pyproject.toml): the log lists the lines no test runs,
+      # and the job summary shows the totals per file. There is no minimum yet. Coverage writes its files to a
+      # folder of its own, because the test user can't write to the checkout.
       - name: Unit tests
         continue-on-error: ${{ github.event_name == 'schedule' }}
         # Unlike the default shell, `shell: bash` sets pipefail, so a pytest failure isn't hidden by tee.
         shell: bash
         run: |
-          docker run --rm --user 1234:1234 -v "$PWD:/workspace" vmrt-workspace:test sh -c \
-            "pip install --user --quiet --disable-pip-version-check --no-warn-script-location -r requirements/pytest_requirements.txt && python -m pytest -rs -p no:cacheprovider" \
-            | tee pytest_output.txt
+          coverage_dir="$RUNNER_TEMP/coverage"
+          mkdir -p "$coverage_dir" && chmod 777 "$coverage_dir"
+          status=0
+          docker run --rm --user 1234:1234 -v "$PWD:/workspace" -v "$coverage_dir:/coverage" \
+            -e COVERAGE_FILE=/coverage/.coverage vmrt-workspace:test sh -c \
+            "pip install --user --quiet --disable-pip-version-check --no-warn-script-location -r requirements/pytest_requirements.txt && python -m pytest -rs -p no:cacheprovider --cov --cov-report=term-missing --cov-report=markdown:/coverage/coverage.md" \
+            | tee pytest_output.txt || status=$?
+          # Shown even when tests fail, since pytest-cov still reports.
+          if [ -f "$coverage_dir/coverage.md" ]; then
+            { echo "### Test coverage (${{ matrix.platform }})"; echo; cat "$coverage_dir/coverage.md"; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
           if grep -qE '[0-9]+ (skipped|xfailed)' pytest_output.txt; then
             echo "::error::Some tests were skipped or expected to fail inside the image. Every test should run there."
             exit 1

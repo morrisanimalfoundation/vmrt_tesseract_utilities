@@ -15,12 +15,15 @@ import sys
 import tempfile
 
 import spacy
-from huggingface_hub.constants import HF_HUB_CACHE
+import yaml
 from PIL import Image, ImageDraw, ImageFont
 
 from vmrt_tesseract_utilities.tesseract_operations import TesseractOperationDoc
 
 EXPECTED_TEXT = 'Vaccines current'
+
+SCRUBBER_CONFIG = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'scrubbers', 'config',
+                               'stanford-deidentifier-base_nlp.yaml')
 
 
 def check_imports() -> None:
@@ -50,17 +53,28 @@ def check_ocr(workdir: str) -> None:
         raise AssertionError(f'OCR did not find {EXPECTED_TEXT!r}; got {output!r}')
 
 
-def check_model_cache_is_writable() -> None:
-    """The PII scrubber downloads its Hugging Face model into this cache on first use."""
-    os.makedirs(HF_HUB_CACHE, exist_ok=True)
-    with tempfile.NamedTemporaryFile(dir=HF_HUB_CACHE):
+def check_scrubber_model() -> None:
+    """The PII scrubber's pinned model is in the folder its config points at, and nothing is fetched at run time."""
+    with open(SCRUBBER_CONFIG) as f:
+        model_dir = yaml.safe_load(f)['models'][0]['model_name']['transformers']
+    for name in ('config.json', 'pytorch_model.bin', 'vocab.txt', 'REVISION'):
+        if not os.path.isfile(os.path.join(model_dir, name)):
+            raise AssertionError(f'The PII scrubber model is missing {name} in {model_dir}')
+    if os.environ.get('HF_HUB_OFFLINE') != '1':
+        raise AssertionError('HF_HUB_OFFLINE should be 1, so the scrubber never downloads a different model.')
+
+
+def check_home_is_writable() -> None:
+    """The container runs as a user with no account in the image, and tools (pip --user, caches) write to HOME."""
+    with tempfile.NamedTemporaryFile(dir=os.environ['HOME']):
         pass
 
 
 if __name__ == '__main__':
     check_imports()
     check_spacy_models()
-    check_model_cache_is_writable()
+    check_scrubber_model()
+    check_home_is_writable()
     with tempfile.TemporaryDirectory() as tmp:
         check_ocr(tmp)
     print('Docker image smoke test passed.')

@@ -10,7 +10,7 @@
 #     lang_code: en
 #     model_name:
 #       spacy: en_core_web_sm
-#       transformers: StanfordAIMI/stanford-deidentifier-base
+#       transformers: /opt/models/stanford-deidentifier-base
 #
 # The script will extract the `spacy` value from the `model_name` section of each YAML file
 # and install the corresponding spaCy model using `python -m spacy download`.
@@ -33,8 +33,9 @@ for config_file in "$CONFIG_DIR"/*.yaml; do
   # Extract the spaCy model name from the YAML file
   spacy_model=$(python -c 'import sys, yaml; print(" ".join(m["model_name"]["spacy"] for m in yaml.safe_load(open(sys.argv[1]))["models"]))' "$config_file")
 
-  # Check if the spaCy model is already installed
-  if ! python -m spacy validate | grep -q $spacy_model; then
+  # Check if the spaCy model is already installed. This looks only at the installed packages, unlike
+  # `spacy validate`, which needs an internet connection, so scrubbing works offline with the image's models.
+  if ! python -c 'import sys, spacy.util; sys.exit(0 if spacy.util.is_package(sys.argv[1]) else 1)' "$spacy_model"; then
     echo "Installing spaCy model: ${spacy_model}"
     python -m spacy download $spacy_model
   else
