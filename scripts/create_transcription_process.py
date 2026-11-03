@@ -6,12 +6,13 @@ from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                TranscriptionMetadata,
                                                get_database_session)
+from vmrt_tesseract_utilities.grls_id import find_subject_id
 from vmrt_tesseract_utilities.logging import stdout_logger
-from vmrt_tesseract_utilities.string_replacer import GRLS_ID_RE
 
 """
 Populates the transcription process log table with files to process and their related metadata.
 """
+
 
 def do_create_transcription_process(args: argparse.Namespace) -> None:
     """
@@ -38,13 +39,8 @@ def do_create_transcription_process(args: argparse.Namespace) -> None:
             )
         }
         for subdir, dirs, files in os.walk(os.path.abspath(args.path_to_describe)):
-            dog_match = next(
-                (match for match in GRLS_ID_RE.finditer(subdir) if match.group(1) == '094'),
-                None,
-            )
-            if dog_match:
-                dog_id = dog_match.group(0)
-            else:
+            dog_id = find_subject_id(subdir)
+            if not dog_id:
                 continue
             for file in files:
                 filepath = subdir + os.sep + file

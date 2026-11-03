@@ -14,6 +14,7 @@ from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                TranscriptionOutput,
                                                get_database_session)
+from vmrt_tesseract_utilities.grls_id import ocr_subject_id_regex
 from vmrt_tesseract_utilities.logging import stdout_logger
 from vmrt_tesseract_utilities.scrubbing_utils import write_scrubbed_txt
 
@@ -27,7 +28,7 @@ EXCLUDE_TYPES = frozenset(['IN_PAN'])  # Use frozenset for efficient lookups.
 # in place of the dash, a letter O read for the leading zero, and an extra zero-padded digit. The model's ID
 # detections are scaled down to 0.4 by the NLP config (low_confidence_score_multiplier), so matching subject IDs
 # by pattern keeps them above any reasonable threshold.
-SUBJECT_ID_PATTERN = Pattern(name='GRLS subject ID', regex=r'(?<!\d)[0O]94[-– ]?0?\d{6}(?!\d)', score=0.9)
+SUBJECT_ID_PATTERN = Pattern(name='GRLS subject ID', regex=ocr_subject_id_regex(), score=0.9)
 
 
 def create_subject_id_recognizer() -> PatternRecognizer:

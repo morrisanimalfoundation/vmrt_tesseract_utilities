@@ -208,3 +208,14 @@ def test_replace_id_variant_does_not_match_inside_longer_digit_run():
     text_blob = "Fax number 10940000520 should be left alone."
     expected = "Fax number 10940000520 should be left alone."
     assert replacer.replace(text_blob) == expected
+
+
+def test_replace_id_with_surrounding_whitespace_still_expands_variants():
+    """
+    Tests that a subject ID target with a line ending left on it (e.g. read from the last column of a TSV) is still
+    treated as an ID, so its variant forms are replaced too.
+    """
+    replacer = StringReplacer(["094-000520\n"], "<ID>")
+    text_blob = "Records 094-000520 and 094000520 refer to the same dog."
+    expected = "Records <ID> and <ID> refer to the same dog."
+    assert replacer.replace(text_blob) == expected
