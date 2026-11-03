@@ -12,10 +12,10 @@ installed. tests/pytests/ocr_accuracy_test.py checks the real thing on rotated p
 """
 
 
-def _fakes(readings, angle=180):
+def _fakes(readings, angle=180, orientation_confidence=10.0):
     """
     Fake Tesseract instances: `readings` is the (text, confidence) of each successive read, and the orientation
-    check reports `angle`, or raises if it's an exception.
+    check reports `angle` with `orientation_confidence`, or raises if `angle` is an exception.
     """
     api = mock.MagicMock()
     api.GetUTF8Text.side_effect = [text for text, _ in readings]
@@ -24,7 +24,7 @@ def _fakes(readings, angle=180):
     if isinstance(angle, Exception):
         osd_api.DetectOrientationScript.side_effect = angle
     else:
-        osd_api.DetectOrientationScript.return_value = {'orient_deg': angle, 'orient_conf': 10.0}
+        osd_api.DetectOrientationScript.return_value = {'orient_deg': angle, 'orient_conf': orientation_confidence}
     return api, osd_api, mock.MagicMock(name='page')
 
 
@@ -59,6 +59,24 @@ def test_turning_that_does_not_help_is_dropped():
     assert TesseractOperationPage()._read_page(api, osd_api, image) == ('Poor scan', 50)
     api.SetImage.assert_called_with(image)
     api.Recognize.assert_called_once()
+
+
+def test_empty_upright_reading_is_not_kept():
+    """
+    Test that an upright reading with no text isn't kept just because Tesseract reports a high confidence for it.
+    This happened on a real record: a readable page (confidence 58) was replaced by an empty reading (confidence 95).
+    """
+    api, osd_api, image = _fakes([('Recheck in six months with bloodwork', 58), ('', 95)], angle=180)
+    assert TesseractOperationPage()._read_page(api, osd_api, image) == ('Recheck in six months with bloodwork', 58)
+
+
+def test_orientation_guess_is_ignored():
+    """
+    Test that an orientation Tesseract is barely confident in (0.1 on the real record above) isn't acted on.
+    """
+    api, osd_api, image = _fakes([('Recheck in six months', 58)], angle=180, orientation_confidence=0.1)
+    assert TesseractOperationPage()._read_page(api, osd_api, image) == ('Recheck in six months', 58)
+    image.rotate.assert_not_called()
 
 
 @pytest.mark.parametrize('angle', [0, RuntimeError('too few characters')])

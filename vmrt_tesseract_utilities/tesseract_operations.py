@@ -17,6 +17,9 @@ TESSDATA_PATH = '/usr/share/tessdata'
 # Pages that read with a mean confidence below this are checked for being sideways or upside down. Pages scanned
 # that way read at about 13 to 36; most upright pages read well above it.
 ORIENTATION_CHECK_BELOW_CONFIDENCE = 60
+# Tesseract's confidence in a detected orientation, below which it's treated as a guess and ignored. Turned pages,
+# real and synthetic, measured 2.5 to 14; a guess that turned a readable real page upside down measured 0.1.
+MIN_ORIENTATION_CONFIDENCE = 1.0
 # The models Tesseract needs: English text, and orientation and script detection (osd) for rotated pages.
 TESSDATA_MODELS = ('eng', 'osd')
 
@@ -160,15 +163,33 @@ class TesseractOperationBase(ABC):
         -------
         int
           The degrees to turn the page counter-clockwise to make it upright: 90, 180 or 270, or 0 if it is upright
-          or its orientation can't be told (for example, because it has too little text).
+          or its orientation can't be told (for example, because it has too little text, or Tesseract is only
+          guessing).
         """
         osd_api.SetImage(image)
         try:
             result = osd_api.DetectOrientationScript()
         except RuntimeError:
             return 0
-        angle = result.get('orient_deg') if result else None
+        if not result or result.get('orient_conf', 0) < MIN_ORIENTATION_CONFIDENCE:
+            return 0
+        angle = result.get('orient_deg')
         return angle if angle in (90, 180, 270) else 0
+
+    @staticmethod
+    def _reading_score(text: str, confidence: int) -> int:
+        """
+        How much confidently read text a reading has: its mean confidence times its number of words.
+
+        Mean confidence alone isn't enough to choose between two readings of a page: Tesseract can report a high
+        confidence for a reading with no text at all.
+
+        >>> TesseractOperationBase._reading_score('Weight 31.2 kg', 90)
+        270
+        >>> TesseractOperationBase._reading_score('', 95)
+        0
+        """
+        return confidence * len(text.split())
 
     def _read_page(self, api: tesserocr.PyTessBaseAPI, osd_api: tesserocr.PyTessBaseAPI,
                    image: Image.Image) -> tuple[str, int]:
@@ -178,10 +199,11 @@ class TesseractOperationBase(ABC):
         Notes
         -----
         A page that reads with low confidence is checked for its orientation. If it is turned, it is turned upright
-        and read again, and the reading with the higher confidence is kept. Pages scanned upside down or turned 90
-        degrees counter-clockwise otherwise come out as garbage. Tesseract's AUTO_OSD mode, which checks every page,
-        was tried first: on real records it also turned some upright pages that read well, ruining their text, and
-        made OCR about 20% slower. tests/pytests/ocr_accuracy_test.py checks every orientation.
+        and read again, and the reading with more confidently read text (see `_reading_score`) is kept. Pages scanned
+        upside down or turned 90 degrees counter-clockwise otherwise come out as garbage. Tesseract's AUTO_OSD mode,
+        which checks every page, was tried first: on real records it also turned some upright pages that read well,
+        ruining their text, and made OCR about 20% slower. tests/pytests/ocr_accuracy_test.py checks every
+        orientation.
 
         Afterwards `api` holds the recognised version of the page that was kept, so its results can be iterated.
 
@@ -203,7 +225,7 @@ class TesseractOperationBase(ABC):
             upright_text, upright_confidence = api.GetUTF8Text(), api.MeanTextConf()
         finally:
             upright.close()
-        if upright_confidence > confidence:
+        if self._reading_score(upright_text, upright_confidence) > self._reading_score(text, confidence):
             return upright_text, upright_confidence
         # Turning didn't help, so go back to the page as scanned.
         self._set_page(api, image)

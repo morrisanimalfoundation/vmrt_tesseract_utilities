@@ -20,6 +20,8 @@ def _fake_ocr(monkeypatch, pages: int, text: str, confidence: int) -> None:
     api = mock.MagicMock()
     api.GetUTF8Text.return_value = text
     api.MeanTextConf.return_value = confidence
+    # As real Tesseract does when it can't tell a page's orientation, e.g. because the page is blank.
+    api.DetectOrientationScript.return_value = None
     tess_api = mock.MagicMock()
     tess_api.return_value.__enter__.return_value = api
     monkeypatch.setattr(tesseract_operations.pdf2image, 'pdfinfo_from_path', lambda path: {'Pages': pages})
