@@ -130,7 +130,7 @@ subject ID are skipped.
 ./run.sh
 ```
 
-The first run downloads the prebuilt workspace image (about 1.4 GB) and the MySQL image, which takes a few
+The first run downloads the prebuilt workspace image (about 1 GB) and the MySQL image, which takes a few
 minutes depending on your connection. Later runs only download what has changed. When it finishes you will see
 a new prompt that looks something like this:
 
@@ -178,10 +178,17 @@ The four arguments are, in order: the data file, the column to read values from,
 the output folder. You can run this step several times with different files or columns (for example, a list
 of dog names); each run builds on the previous one.
 
-The script records which files have completed each replacement pass. Re-running the same command skips completed files and selects the next batch; repeat it until no files remain. A different ordered target list or replacement string starts a new pass. Complete all replacement passes before step 4; a later pass does not automatically rerun PII scrubbing for files already scrubbed.
+The script records which files have completed each replacement pass. Re-running the same command skips completed files and selects the next batch; repeat it until no files remain, or pass `--until-done` to process every batch in one run. A different ordered target list or replacement string starts a new pass. Complete all replacement passes before step 4; a later pass does not automatically rerun PII scrubbing for files already scrubbed.
+
+A file that fails (for example, its OCR text file is missing) is recorded as failed for that pass, the run carries on, and the summary at the end lists it. Failed files are skipped on later runs of the pass; add `--retry-failed` to try them again. Each file is written to a temporary file, saved to disk and then swapped into place, so a crash, a power cut or a full disk leaves either the old text or the new text, never a mix. A hard kill part way through a write can leave a hidden `.tmp` file next to the outputs; it's harmless and can be deleted.
+
+Once no files are left to process, the script also checks that every file already completed for the pass still has its output file. Missing ones are listed at the end and in `output/missing_replacement_outputs_pass_<pass id>.txt`, with their `transcription_output` ids; the report is removed once nothing is missing. A file's text is the result of every pass run on it, so a missing one can only be rebuilt from its OCR text: for each listed file, set `list_replacement_output_file` back to `NULL` in `transcription_output`, delete that output's rows in `string_replacement_completion`, then rerun every replacement pass in order.
+
+The script exits with code 0 when everything succeeded, 3 when it finished but some files failed or are missing, and 1 if it couldn't run at all. A scheduler such as Jenkins can tell 3 apart from a crash, but **don't start step 4 until every replacement pass exits with 0**: a failed file still contains the strings the pass should have replaced, and step 4 would scrub and save it anyway, with no later chance to remove them.
 
 **4. Scrub PII** — uses an NLP model to find and remove names, addresses, phone numbers, and similar. The
-first time you run this in a session it downloads the model, which needs an internet connection.
+model is built into the image at a pinned version, so no internet connection is needed (see **Updating the PII
+scrubber's model** below).
 
 ```bash
 python scripts/scrubbers/pii_scrubber.py /workspace/output
@@ -189,6 +196,11 @@ python scripts/scrubbers/pii_scrubber.py /workspace/output
 
 **5. Mine metadata** — compares dates found in the text with each dog's known visit dates to work out which
 visit a document belongs to.
+
+You can run this before step 4: a file without a PII scrubber report is searched using its text instead (the
+output of step 3 if it ran, otherwise the raw OCR text), and the log says so. Raw text is noisier, so a date can
+be matched that the scrubber's report wouldn't have produced, and once a file has a visit date it isn't searched
+again. For the most reliable dates, finish step 4 first.
 
 ```bash
 python scripts/metadata_miners/visit_date_miner.py /workspace/output \
@@ -206,26 +218,39 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 | Script | Document type | Batch size | Skip records | Show SQL | Other |
 | --- | --- | --- | --- | --- | --- |
 | `create_transcription_process.py` | `--document-type` | — | — | `--debug-sql` | |
-| `transcribe_pdfs.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | |
-| `replace_strings.py` | `--document-type` | `--chunk-size` | — | `--debug-sql` | `--max-workers`, `--no-multiprocessing` |
-| `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config` |
+| `transcribe_pdfs.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--retry-failed` |
+| `replace_strings.py` | `--document-type` | `--chunk-size` | — | `--debug-sql` | `--max-workers`, `--no-multiprocessing`, `--until-done`, `--retry-failed` |
+| `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config`, `--until-done` |
 | `visit_date_miner.py` | — | `--chunk-size` | `--offset` | `--debug-sql` | `--visit-date-threshold`, `--search-unstructured-text-dir` |
 
 - **Document type** (`document`, `page`, or `block`; default `document`) controls how finely the OCR output
   is split: one text file per PDF, one per page, or one per detected line of text. Whatever you choose in
   step 1 must be passed to steps 2, 3, and 4 as well, or those steps will find nothing to do.
 - **Batch size** defaults to 1000 files per run in steps 2, 3, and 4. If you have more than 1000 files,
-  re-run steps 2 and 4 until they stop finding files (step 2 prints `Found 0 files to transcribe`). Step 3 skips files already completed for that replacement pass, so rerun the same command to process the next batch; no `--offset` is needed.
+  re-run steps 2 and 4 until they stop finding files (step 2 prints `Found 0 files to transcribe`, step 4
+  `Found 0 files to scrub`), or pass `--until-done` to step 4 to scrub every batch in one run. Step 3 skips files already completed for that replacement pass, so rerun the same command to process the next batch; no `--offset` is needed.
+- Step 2 records each PDF it tries as `success` or `failed` (`ocr_status` and `ocr_error` in
+  `transcription_input`), keeps going after a failure, and lists every failed file at the end. Failed files are
+  skipped on later runs; pass `--retry-failed` to try them again. If poppler or Tesseract isn't usable, step 2
+  stops before touching any file.
 - `--threshold` (step 4) is the minimum confidence score, from 0 to 1, a detection needs before it is
-  removed. The default `0.0` removes everything the model flags.
+  removed. The default `0.0` removes everything the model flags. Raising it lets identifiers through: some,
+  such as ZIP codes and house numbers, score around 0.4. GRLS subject IDs written as `094-012345` (or with a
+  space, an en dash or nothing for the dash, a letter O for the first zero, or an extra zero after the dash)
+  are also matched by pattern with a score of 0.9, so those are removed at any threshold up to that.
+- Step 4 skips files it has already scrubbed. After changing `--threshold` or updating the scrubber, files
+  scrubbed before the change keep their old output: to scrub them again, set `pii_scrubber_output_file` and
+  `pii_scrubber_confidence_file` back to `NULL` for those rows in `transcription_output` and rerun step 4. In
+  particular, `scrub_txt_files.sh` used `--threshold=0.45` until November 2026, which left subject IDs, ZIP codes
+  and house numbers in the text, so rescrub anything it processed before then.
 - `--visit-date-threshold` (step 5) is how many days apart a date in the text and a known visit date can be
   and still count as a match. The default is 3.
 - `--search-unstructured-text-dir` (step 5) also searches the raw OCR text for dates, not only the PII
-  scrubber's report.
+  scrubber's report. If step 4 hasn't run for a file, the miner always falls back to its text (see step 5).
 
 `scripts/scrubbers/scrub_txt_files.sh /workspace/output` is an alternative way to run step 4. It installs
-any spaCy models listed in `scripts/scrubbers/config/` first, then runs `pii_scrubber.py` with
-`--threshold=0.45`.
+any spaCy models listed in `scripts/scrubbers/config/` first, then runs `pii_scrubber.py` with the default
+threshold and `--until-done`, so it scrubs every file rather than one batch.
 
 ## Where the results go
 
@@ -234,7 +259,7 @@ computer as well as from inside the container:
 
 | Path | Contents |
 | --- | --- |
-| `output/unstructured_text/<document-type>/` | Raw OCR text (step 2) |
+| `output/unstructured_text/<document-type>/` | Raw OCR text (step 2), one file per PDF, page or line, named `<input id>-<PDF name>-<page>-<block>.txt` |
 | `output/list_replacement_output_file/<document-type>/` | Text after string replacement (step 3) |
 | `output/scrubbed_text/<document-type>/scrubbed_<document-type>/` | Text after PII scrubbing (step 4) |
 | `output/scrubbed_text/<document-type>/scrubbed_confidence/` | One JSON report per file listing what was detected and with what confidence (step 4) |
@@ -271,6 +296,17 @@ it, or copy it anywhere it is not supposed to be.
   docker exec -it vmrt-emr-workspace bash
   ```
 - **To start completely clean**, exit the container, delete the `output` folder, and run `./run.sh` again.
+- **If you keep a database between runs** (for example by changing `run.sh`), note that
+  `database_setup.py install` creates missing tables but doesn't add new columns to existing ones. A database
+  created before step 2 started recording failures needs:
+  ```sql
+  ALTER TABLE transcription_input ADD COLUMN ocr_status VARCHAR(20), ADD COLUMN ocr_error TEXT;
+  ```
+  and one created before step 3 started recording failures needs:
+  ```sql
+  ALTER TABLE string_replacement_completion
+    ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'success', ADD COLUMN error TEXT;
+  ```
 
 ## Reference data files
 
@@ -362,8 +398,9 @@ rather than with `git add .`, so nothing extra is swept in.
 
 ## Development
 
-- **Tests**: `pytest` (configured via `pytest.ini`). The test suite mocks the database and does not require
-  Tesseract, so it can be run on your own computer without Docker:
+- **Tests**: `pytest` (configured via `pytest.ini`). The test suite mocks the database, and the tests that need
+  packages only installed in the image (such as the PII scrubber tests) are skipped outside it, so it can be run
+  on your own computer without Docker:
   ```bash
   python3 -m venv .venv
   source .venv/bin/activate
@@ -371,15 +408,32 @@ rather than with `git add .`, so nothing extra is swept in.
   pytest
   ```
   Run a single test with `pytest tests/pytests/string_replacer_test.py::test_replace_single_string`.
+- **Coverage**: add `--cov` to a pytest command to see which lines no test runs (configured in
+  `pyproject.toml`; it covers `vmrt_tesseract_utilities/` and `scripts/`), for example `pytest --cov`. The
+  `Missing` column lists the line numbers. Outside the image the tests that need the image's packages are
+  skipped, so their code shows as not covered. For the real numbers, run it inside the image. The container's
+  user can't write to your repository folder, so `COVERAGE_FILE` puts coverage's data file in the container
+  instead:
+  ```bash
+  docker run --rm --user 1234:1234 -v "$PWD:/workspace" -e COVERAGE_FILE=/tmp/.coverage ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities:main sh -c "pip install --user -r requirements/pytest_requirements.txt && python -m pytest -p no:cacheprovider --cov"
+  ```
+  CI does the same and shows the per-file totals in each `Docker Image` run's summary. There is no minimum yet.
 - **Linting**: `./sort_and_lint.sh` runs `isort` and `flake8` (line length is not enforced). Install
   dependencies first with `pip install -r requirements/ci_requirements.txt`.
-- Both checks run automatically on every pull request to `main`.
+- Both checks run automatically on every pull request to `main`. Pull requests that change code, tests, or the
+  image also run the tests inside the image (see **Docker image** below), with the exact package versions the
+  pipeline uses. To do the same locally, run this from the repository folder (after `./run.sh --build`, it uses
+  your local build, which has the same name):
+  ```bash
+  docker run --rm --user 1234:1234 -v "$PWD:/workspace" ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities:main sh -c "pip install --user -r requirements/pytest_requirements.txt && python -m pytest -rs -p no:cacheprovider"
+  ```
 - **Docker image**: `./run.sh` downloads a prebuilt image from
   `ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities`. The image holds the tools and Python packages
   only; the code is mounted from your copy of the repository, so code changes never need a new image. The
   `Docker Image` workflow (`.github/workflows/docker_image.yaml`) rebuilds and publishes it when `Dockerfile`
   or the requirements change on `main`, and weekly (from scratch, with Debian's latest security fixes). Pull
-  requests that touch those files are built and checked with `tests/docker_smoke_test.py` but not published.
+  requests that touch those files, the code or the tests are built and checked with `tests/docker_smoke_test.py`
+  and the full test suite (which fails if any test is skipped) but not published.
   If you are changing `Dockerfile`, `requirements.in`, or `requirements.txt`, use `./run.sh --build` to build
   the image locally instead (a few minutes), and run the smoke test from the repository folder:
   ```bash
@@ -391,15 +445,15 @@ rather than with `git add .`, so nothing extra is swept in.
   ```bash
   gh attestation verify oci://ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities:main -R morrisanimalfoundation/vmrt_tesseract_utilities
   ```
-- **Security**: pull requests that change the image fail if it has a critical vulnerability with a fix
-  available. Every published image (amd64 and arm64) is scanned too, and its high and critical findings that
+- **Security**: pull requests that build the image, including code and test changes, fail if it has a critical
+  vulnerability with a fix available. Every published image (amd64 and arm64) is scanned too, and its high and critical findings that
   have a fix appear under the repository's **Security → Code scanning** tab. When a pinned Python package gets a known vulnerability
   with a fix, Dependabot opens a pull request that updates it in `requirements.in` and `requirements.txt`.
 - **Dependencies**: `requirements.in` lists the direct dependencies and `requirements.txt` is generated from
   it, so don't edit `requirements.txt` by hand. To regenerate it, run this from the repository folder, outside
   the container (it uses the same Python version as the Docker image):
   ```bash
-  docker run --rm -v "$PWD:/src" -w /src python:3.11 sh -c "pip install -q pip-tools==7.6.2 && pip-compile --strip-extras requirements.in"
+  docker run --rm -v "$PWD:/src" -w /src python:3.11-slim sh -c "pip install -q pip-tools==7.6.2 && pip-compile --strip-extras requirements.in"
   ```
   Existing pins are kept; add `--upgrade` only when you mean to update them. Keep `presidio_analyzer[transformers]`
   and `torch` in `requirements.in` (the PII scrubber needs them) and keep the CPU-only PyTorch index line at the
@@ -409,6 +463,28 @@ rather than with `git add .`, so nothing extra is swept in.
   version that still fits, so always regenerate the file with the command above.
   `requirements/pytest_requirements.txt` pins only the test tools and takes every other version from
   `requirements.txt`, so a version change there applies to the tests too.
+- **Updating the PII scrubber's model**: the image contains one fixed revision of the
+  `StanfordAIMI/stanford-deidentifier-base` model from Hugging Face, so the scrubber only changes when we choose,
+  and it never downloads anything at run time (`HF_HUB_OFFLINE=1`). To move to a newer revision on purpose:
+  1. On the model's Hugging Face page, open **Files and versions**, pick the commit and copy its full hash.
+     Check which files it has: the `Dockerfile` downloads `config.json`, `pytorch_model.bin`,
+     `special_tokens_map.json`, `tokenizer_config.json` and `vocab.txt`.
+  2. Print the files' SHA-256 checksums (replace `<hash>` with the commit hash):
+     ```bash
+     for f in config.json pytorch_model.bin special_tokens_map.json tokenizer_config.json vocab.txt; do
+       echo "$(curl -fsSL https://huggingface.co/StanfordAIMI/stanford-deidentifier-base/resolve/<hash>/$f | sha256sum | cut -d' ' -f1) $f"
+     done
+     ```
+  3. In `Dockerfile`, set `SCRUBBER_MODEL_REVISION` to the hash and replace the checksums listed for the model's
+     files. Build with `./run.sh --build` and run the tests inside the image (see above).
+  4. `tests/pytests/pii_scrubber_test.py` fails until `BASELINE_MODEL` names the new revision. Before changing
+     it, check whether the new revision scrubs worse (identifiers that leak, medical text removed), then update
+     `BASELINE_MODEL` and, if they changed, `BASELINE_COUNTS`.
+
+  The scrubber's config (`scripts/scrubbers/config/stanford-deidentifier-base_nlp.yaml`) points at the folder the
+  model is saved in, so it needs an image built from this repository's `Dockerfile` of November 2026 or later.
+  On an older image (such as a `sha-` tag from before then), the scrubber stops with an error saying the model
+  folder doesn't exist. `./run.sh` pulls the latest image every time it starts.
 
 ## License
 

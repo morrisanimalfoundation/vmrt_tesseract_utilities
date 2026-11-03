@@ -3,9 +3,12 @@ import json
 import os
 import sys
 
-from presidio_analyzer import AnalyzerEngine, RecognizerResult
+import yaml
+from presidio_analyzer import (AnalyzerEngine, Pattern, PatternRecognizer,
+                               RecognizerResult)
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_anonymizer import AnonymizerEngine
+from sqlalchemy.pool import NullPool
 
 from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.database import (TranscriptionInput,
@@ -20,13 +23,59 @@ Leverages presidio to attempt automatic PII stripping.
 
 EXCLUDE_TYPES = frozenset(['IN_PAN'])  # Use frozenset for efficient lookups.
 
+# GRLS subject IDs (e.g. "094-012345"), including the forms they take in OCR'd text: a space, en dash or nothing
+# in place of the dash, a letter O read for the leading zero, and an extra zero-padded digit. The model's ID
+# detections are scaled down to 0.4 by the NLP config (low_confidence_score_multiplier), so matching subject IDs
+# by pattern keeps them above any reasonable threshold.
+SUBJECT_ID_PATTERN = Pattern(name='GRLS subject ID', regex=r'(?<!\d)[0O]94[-– ]?0?\d{6}(?!\d)', score=0.9)
+
+
+def create_subject_id_recognizer() -> PatternRecognizer:
+    """
+    Creates the pattern recognizer for GRLS subject IDs.
+
+    Subject IDs are reported as ID, the same entity type the model uses, so they are still replaced with <ID>.
+
+    Returns
+    -------
+    PatternRecognizer
+        The subject ID recognizer.
+    """
+    return PatternRecognizer(supported_entity='ID', name='GrlsSubjectIdRecognizer', patterns=[SUBJECT_ID_PATTERN])
+
+
+def find_missing_model_folders(nlp_config_file: str) -> list[str]:
+    """
+    Lists the transformers model folders an NLP config names that don't exist.
+
+    The image has the scrubber's model in a fixed folder, which the config names by path. In an image built before
+    the model was added, or outside the image, the folder is missing, and transformers would otherwise report it as
+    an invalid Hugging Face model ID.
+
+    Parameters
+    ----------
+    nlp_config_file : str
+        The filename of the YAML configuration file for the NLP engine.
+
+    Returns
+    -------
+    list[str]
+        The missing folders. Models named by Hugging Face ID rather than by path are not checked.
+    """
+    with open(nlp_config_file) as f:
+        config = yaml.safe_load(f)
+    folders = [model['model_name']['transformers'] for model in config.get('models', [])
+               if isinstance(model.get('model_name'), dict) and 'transformers' in model['model_name']]
+    return [folder for folder in folders if os.path.isabs(folder) and not os.path.isdir(folder)]
+
 
 def create_nlp_engine(nlp_config_file: str) -> AnalyzerEngine:
     """
     Creates and configures a Presidio AnalyzerEngine.
 
     Sets up a Presidio AnalyzerEngine using the provided
-    configuration file, which specifies the NLP engine and other settings.
+    configuration file, which specifies the NLP engine and other settings,
+    and adds a pattern recognizer for GRLS subject IDs.
 
     Parameters
     ----------
@@ -40,13 +89,23 @@ def create_nlp_engine(nlp_config_file: str) -> AnalyzerEngine:
 
     Raises
     ------
+    FileNotFoundError
+        If a model folder the config names doesn't exist.
     Exception
-        If any error occurs during the creation of the NLP engine.
+        If any other error occurs during the creation of the NLP engine.
     """
+    missing = find_missing_model_folders(nlp_config_file)
+    if missing:
+        raise FileNotFoundError(
+            f'The PII scrubber model folder {", ".join(missing)} does not exist. The model is built into the '
+            f'workspace image, so run this inside a current image: ./run.sh pulls the latest one, or use '
+            f'./run.sh --build.')
     try:
         provider = NlpEngineProvider(conf_file=nlp_config_file)
         engine = provider.create_engine()
-        return AnalyzerEngine(nlp_engine=engine)
+        analyzer = AnalyzerEngine(nlp_engine=engine)
+        analyzer.registry.add_recognizer(create_subject_id_recognizer())
+        return analyzer
 
     except Exception as e:
         stdout_logger.error(f'Error creating NLP engine: {e}')
@@ -132,7 +191,8 @@ def process_files(process_filepath_data: list, analyzer: AnalyzerEngine,
     threshold : float
         The confidence threshold for PII detection.
     """
-    sessionmaker = get_database_session(echo=args.debug_sql)
+    # This runs once per chunk, so don't keep a pool of connections open for each one.
+    sessionmaker = get_database_session(echo=args.debug_sql, poolclass=NullPool)
     with sessionmaker() as session:
         for output_log in process_filepath_data:
             session.add(output_log)  # Ensure the instance is bound to the session
@@ -181,16 +241,44 @@ def get_files_to_process(args: argparse.Namespace) -> list:
     results: list
       The list of input files.
     """
-    sessionmaker = get_database_session(echo=args.debug_sql)
-    with sessionmaker.begin() as session:
+    # This runs once per chunk, so don't keep a pool of connections open for each one.
+    sessionmaker = get_database_session(echo=args.debug_sql, poolclass=NullPool)
+    # Load the rows inside the session, so closing it detaches them for process_files to attach to its own.
+    with sessionmaker() as session:
         query = (session.query(TranscriptionOutput)
                  .outerjoin(TranscriptionInput.assets)
                  .where(TranscriptionInput.document_type == args.document_type)
                  .where(TranscriptionOutput.ocr_output_file != None)  # noqa: E711
                  .where(TranscriptionOutput.pii_scrubber_output_file == None)  # noqa: E711
+                 .order_by(TranscriptionOutput.id)
                  .limit(args.chunk_size)
                  .offset(args.offset))
-    return query.all()
+        results = query.all()
+    return results
+
+
+def scrub_chunks(args: argparse.Namespace, analyzer: AnalyzerEngine) -> None:
+    """
+    Scrubs one chunk of files, or with --until-done, keeps scrubbing chunks until no files are left.
+
+    Each chunk is committed before the next is queried, so the loop ends: a file that fails stops the run with
+    an exception rather than being picked again.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        The parsed args.
+    analyzer : AnalyzerEngine
+        The Presidio analyzer engine.
+    """
+    while True:
+        db_output_logs = get_files_to_process(args)
+        stdout_logger.info(f'Found {len(db_output_logs)} files to scrub.')
+        if not db_output_logs:
+            return
+        process_files(db_output_logs, analyzer, args.output_to, args.threshold)
+        if not args.until_done:
+            return
 
 
 def parse_args() -> argparse.Namespace:
@@ -217,11 +305,16 @@ def parse_args() -> argparse.Namespace:
                         help='The config file for the NLP engine.')
     parser.add_argument('--threshold', required=False, type=float, default=0.0,
                         help='The target confidence threshold for scores.')
-    return parser.parse_args(normalize_flag_spelling(sys.argv[1:]))
+    parser.add_argument('--until-done', action='store_true',
+                        help='Keep scrubbing chunks until no files are left, instead of stopping after one.')
+    args = parser.parse_args(normalize_flag_spelling(sys.argv[1:]))
+    # The offset would be applied to every chunk, so the run would stop with that many files still unscrubbed.
+    if args.until_done and args.offset:
+        parser.error('--offset can\'t be used with --until-done, which scrubs every file.')
+    return args
 
 
 if __name__ == '__main__':
     args = parse_args()
-    db_output_logs = get_files_to_process(args)
     nlp_engine = create_nlp_engine(args.config)
-    process_files(db_output_logs, nlp_engine, args.output_to, args.threshold)
+    scrub_chunks(args, nlp_engine)

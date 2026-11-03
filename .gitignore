@@ -11,3 +11,6 @@ data
 .env
 ./models
 /output/
+.coverage
+.coverage.*
+htmlcov/

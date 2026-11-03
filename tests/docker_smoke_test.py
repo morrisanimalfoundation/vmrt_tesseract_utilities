@@ -7,7 +7,7 @@ as a user that has no account in the image (as docker-compose.yml does):
 
     docker run --rm --user 1234:1234 -v "$PWD:/workspace" <image> python tests/docker_smoke_test.py
 
-It is not part of the pytest suite, which runs without Docker.
+It is not part of the pytest suite, which runs both without Docker and, in CI, inside the image.
 """
 
 import os
@@ -15,18 +15,21 @@ import sys
 import tempfile
 
 import spacy
-from huggingface_hub.constants import HF_HUB_CACHE
+import yaml
 from PIL import Image, ImageDraw, ImageFont
 
 from vmrt_tesseract_utilities.tesseract_operations import TesseractOperationDoc
 
 EXPECTED_TEXT = 'Vaccines current'
 
+SCRUBBER_CONFIG = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'scrubbers', 'config',
+                               'stanford-deidentifier-base_nlp.yaml')
+
 
 def check_imports() -> None:
     """The PII scrubber's NLP engine needs these, and they have gone missing before (#21)."""
     import presidio_analyzer  # noqa: F401
-    import spacy_huggingface_pipelines  # noqa: F401
+    import presidio_analyzer.nlp_engine.huggingface_token_pipe  # noqa: F401
     import torch  # noqa: F401
     import transformers  # noqa: F401
 
@@ -50,17 +53,28 @@ def check_ocr(workdir: str) -> None:
         raise AssertionError(f'OCR did not find {EXPECTED_TEXT!r}; got {output!r}')
 
 
-def check_model_cache_is_writable() -> None:
-    """The PII scrubber downloads its Hugging Face model into this cache on first use."""
-    os.makedirs(HF_HUB_CACHE, exist_ok=True)
-    with tempfile.NamedTemporaryFile(dir=HF_HUB_CACHE):
+def check_scrubber_model() -> None:
+    """The PII scrubber's pinned model is in the folder its config points at, and nothing is fetched at run time."""
+    with open(SCRUBBER_CONFIG) as f:
+        model_dir = yaml.safe_load(f)['models'][0]['model_name']['transformers']
+    for name in ('config.json', 'pytorch_model.bin', 'vocab.txt', 'REVISION'):
+        if not os.path.isfile(os.path.join(model_dir, name)):
+            raise AssertionError(f'The PII scrubber model is missing {name} in {model_dir}')
+    if os.environ.get('HF_HUB_OFFLINE') != '1':
+        raise AssertionError('HF_HUB_OFFLINE should be 1, so the scrubber never downloads a different model.')
+
+
+def check_home_is_writable() -> None:
+    """The container runs as a user with no account in the image, and tools (pip --user, caches) write to HOME."""
+    with tempfile.NamedTemporaryFile(dir=os.environ['HOME']):
         pass
 
 
 if __name__ == '__main__':
     check_imports()
     check_spacy_models()
-    check_model_cache_is_writable()
+    check_scrubber_model()
+    check_home_is_writable()
     with tempfile.TemporaryDirectory() as tmp:
         check_ocr(tmp)
     print('Docker image smoke test passed.')

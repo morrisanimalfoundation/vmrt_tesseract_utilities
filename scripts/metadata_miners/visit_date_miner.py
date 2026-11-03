@@ -1,5 +1,6 @@
 import argparse
 import csv
+import os
 import sys
 from datetime import datetime, timedelta
 from typing import List, Optional, Set, Tuple
@@ -228,6 +229,48 @@ def set_visit_dates_from_files(
         session.add_all(new_metadata)
 
 
+def select_files_to_check(row, parsed_args: argparse.Namespace) -> List[str]:
+    """
+    Picks the files to search for one transcription output's dates.
+
+    The PII scrubber's report is searched if there is one. If step 4 hasn't run for this output, its text is
+    searched instead: the string replacement output if step 3 ran, otherwise the raw OCR text. Before this
+    fallback, those outputs crashed the miner (#22). With --search-unstructured-text-dir, the raw OCR text is
+    searched as well. Files that don't exist are left out with a warning, so one missing file doesn't stop the run.
+
+    Parameters
+    ----------
+    row : TranscriptionOutput
+        The transcription output.
+    parsed_args : argparse.Namespace
+        The parsed args.
+
+    Returns
+    -------
+    list of str
+        The paths of the files to search. Empty if there are none.
+    """
+    files = []
+    if row.pii_scrubber_confidence_file:
+        files.append(row.pii_scrubber_confidence_file)
+    else:
+        # The same choice the replacement and scrubbing stages make. The replacement output is better than the raw
+        # OCR text, since subject IDs that replacement removed could otherwise be read as dates.
+        text_file = row.list_replacement_output_file or row.ocr_output_file
+        if text_file:
+            stdout_logger.info(f'No PII scrubber report for output {row.id}; searching {text_file} instead.')
+            files.append(text_file)
+    if parsed_args.search_unstructured_text_dir and row.ocr_output_file and row.ocr_output_file not in files:
+        files.append(row.ocr_output_file)
+    existing = []
+    for file in files:
+        if os.path.exists(file):
+            existing.append(file)
+        else:
+            stdout_logger.warning(f'Skipping missing file for output {row.id}: {file}')
+    return existing
+
+
 def save_visit_dates(parsed_args: argparse.Namespace):
     """
     Gets a list of dates from the output files. Optimized to reduce database interactions.
@@ -247,8 +290,17 @@ def save_visit_dates(parsed_args: argparse.Namespace):
                 TranscriptionMetadata,
                 TranscriptionOutput.input_id == TranscriptionMetadata.input_id,
             )
-            # Filter for records where visit_date is NULL
-            .filter(TranscriptionMetadata.visit_date.is_(None))
+            # Records where visit_date is NULL, with at least one file to search.
+            .filter(
+                TranscriptionMetadata.visit_date.is_(None),
+                sqlalchemy.or_(
+                    TranscriptionOutput.pii_scrubber_confidence_file.isnot(None),
+                    TranscriptionOutput.list_replacement_output_file.isnot(None),
+                    TranscriptionOutput.ocr_output_file.isnot(None),
+                ),
+            )
+            # Without an order, which rows --offset skips isn't defined and can change between runs.
+            .order_by(TranscriptionOutput.id)
             # Apply offset and limit for chunking
             .offset(parsed_args.offset)
             .limit(parsed_args.chunk_size)
@@ -257,9 +309,10 @@ def save_visit_dates(parsed_args: argparse.Namespace):
 
         stdout_logger.info(f'Searching {len(results)} files for visit dates.')
         for row, subject_id in results:
-            files_to_check = [row.pii_scrubber_confidence_file]
-            if parsed_args.search_unstructured_text_dir:
-                files_to_check.append(row.ocr_output_file)
+            files_to_check = select_files_to_check(row, parsed_args)
+            if not files_to_check:
+                stdout_logger.warning(f'Skipping output {row.id}: none of its files exist.')
+                continue
             set_visit_dates_from_files(
                 files_to_check, session, subject_id, row.input_id, parsed_args
             )

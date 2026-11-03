@@ -3,7 +3,7 @@ import os
 from typing import List, Optional
 
 from dotenv import load_dotenv
-from sqlalchemy import (DateTime, Float, ForeignKey, Integer, String,
+from sqlalchemy import (DateTime, Float, ForeignKey, Integer, String, Text,
                         UniqueConstraint, create_engine, func)
 from sqlalchemy.dialects.mysql import VARCHAR
 from sqlalchemy.orm import (DeclarativeBase, Mapped, mapped_column,
@@ -34,6 +34,9 @@ class TranscriptionInput(Base):
     input_file: Mapped[Optional[str]] = mapped_column(
         String(255).with_variant(VARCHAR(255, collation='utf8mb4_0900_bin'), 'mysql')
     )
+    # 'success' or 'failed' once transcribe_pdfs has tried this file, None before that.
+    ocr_status: Mapped[Optional[str]] = mapped_column(String(20))
+    ocr_error: Mapped[Optional[str]] = mapped_column(Text)
     assets: Mapped[List['TranscriptionOutput']] = relationship(
         back_populates='transcription_input', cascade='all, delete-orphan'
     )
@@ -106,7 +109,7 @@ class StringReplacementPass(Base):
 
 class StringReplacementCompletion(Base):
     """
-    Records that a transcription output completed a particular string-replacement pass.
+    Records the result of a transcription output's last attempt at a particular string-replacement pass.
     """
     __tablename__ = "string_replacement_completion"
 
@@ -117,9 +120,13 @@ class StringReplacementCompletion(Base):
     pass_id: Mapped[int] = mapped_column(
         ForeignKey("string_replacement_pass.id"), nullable=False
     )
+    # When the last attempt finished, whether it succeeded or failed.
     completed_at: Mapped[Optional[datetime.datetime]] = mapped_column(
         DateTime, server_default=func.now()
     )
+    # 'success' or 'failed'. Failed outputs are skipped on later runs unless replace_strings.py gets --retry-failed.
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default='success', server_default='success')
+    error: Mapped[Optional[str]] = mapped_column(Text)
 
     __table_args__ = (
         UniqueConstraint(
@@ -141,6 +148,6 @@ def get_database_session(**kwargs) -> sessionmaker:
     """
     sql_url = os.getenv('SQL_CONNECTION_STRING')
     if sql_url is None:
-        RuntimeError('SQL_CONNECTION_STRING environment variable is not set.')
+        raise RuntimeError('SQL_CONNECTION_STRING environment variable is not set.')
     engine = create_engine(sql_url, **kwargs)
     return sessionmaker(engine)

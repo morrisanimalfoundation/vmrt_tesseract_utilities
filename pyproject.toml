@@ -13,3 +13,13 @@ authors = [
 
 [tool.setuptools]
 packages=["vmrt_tesseract_utilities"]
+
+# Used by `pytest --cov` (pytest-cov). scripts/ has no __init__.py files, so its folders are namespace packages,
+# which coverage only reports files from (including files no test ran) with include_namespace_packages.
+[tool.coverage.run]
+source = ["vmrt_tesseract_utilities", "scripts"]
+
+[tool.coverage.report]
+include_namespace_packages = true
+show_missing = true
+skip_empty = true
