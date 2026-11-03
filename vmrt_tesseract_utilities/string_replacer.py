@@ -1,7 +1,7 @@
 import re
 from typing import List
 
-from vmrt_tesseract_utilities.grls_id import id_variants, parse_id
+from vmrt_tesseract_utilities.grls_id import id_variants
 
 """
 Provides string replacement functionality.
@@ -51,25 +51,7 @@ class StringReplacer:
         self._patterns = [self._build_pattern(target) for target in self.target_strings]
 
     @staticmethod
-    def _expand_id_variants(target: str) -> List[str]:
-        """
-        Expands a GRLS-style subject ID into the variant forms it may appear as in
-        OCR'd text. Strings that don't look like a GRLS ID are returned unchanged.
-
-        Parameters
-        ----------
-        target : str
-            The candidate target string.
-
-        Returns
-        -------
-        list of str
-            The target string, plus any additional ID variants.
-        """
-        return id_variants(target) or [target]
-
-    @classmethod
-    def _build_pattern(cls, target: str) -> re.Pattern:
+    def _build_pattern(target: str) -> re.Pattern:
         """
         Builds a single compiled pattern matching a target string and all of its
         ID variants, so the text only needs to be scanned once per target.
@@ -84,9 +66,10 @@ class StringReplacer:
         re.Pattern
             A compiled, case-insensitive pattern matching any variant of the target.
         """
-        is_id = parse_id(target) is not None
+        id_forms = id_variants(target)
+        is_id = bool(id_forms)
         # Longest first, so a variant that's a prefix of another isn't matched short.
-        variants = sorted(cls._expand_id_variants(target), key=len, reverse=True)
+        variants = sorted(id_forms or [target], key=len, reverse=True)
         alternation = '|'.join(re.escape(variant) for variant in variants)
         if is_id:
             # ID variants start and end with digits; without a boundary check, one

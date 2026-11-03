@@ -6,7 +6,8 @@ from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                TranscriptionMetadata,
                                                get_database_session)
-from vmrt_tesseract_utilities.grls_id import find_subject_id
+from vmrt_tesseract_utilities.grls_id import (find_subject_id,
+                                              looks_like_subject_id)
 from vmrt_tesseract_utilities.logging import stdout_logger
 
 """
@@ -41,6 +42,12 @@ def do_create_transcription_process(args: argparse.Namespace) -> None:
         for subdir, dirs, files in os.walk(os.path.abspath(args.path_to_describe)):
             dog_id = find_subject_id(subdir)
             if not dog_id:
+                # Folders with no ID at all (the top folder, for example) are skipped quietly, but one whose name
+                # looks like an ID that isn't accepted, e.g. "094-0001312", is reported so its files aren't lost.
+                if looks_like_subject_id(os.path.basename(subdir)):
+                    stdout_logger.warning(
+                        f'Skipping folder, its name contains a number that is not a valid subject ID: {subdir}'
+                    )
                 continue
             for file in files:
                 filepath = subdir + os.sep + file

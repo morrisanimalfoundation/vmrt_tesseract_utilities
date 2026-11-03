@@ -95,7 +95,7 @@ def test_registration_treats_path_spellings_as_the_same_file(tmp_path, monkeypat
     assert [row.input_file for row in inputs] == [str(dog_dir / "record.pdf")]
 
 
-def test_registration_reads_subject_id_from_path(tmp_path, monkeypatch):
+def test_registration_reads_subject_id_from_path(tmp_path, monkeypatch, caplog):
     """
     Tests which folders are registered, and under which subject ID, when folder names contain other numbers.
 
@@ -104,10 +104,13 @@ def test_registration_reads_subject_id_from_path(tmp_path, monkeypatch):
             Temporary directory used to create the input file tree.
         monkeypatch : pytest.MonkeyPatch
             Fixture used to replace the database session with an isolated test database.
+        caplog : pytest.LogCaptureFixture
+            Fixture used to capture log messages.
 
     Asserts:
         Files under a GRLS subject ID folder are registered with that ID, and files in folders whose ID is part of
-        a longer number, or has another site prefix, are skipped.
+        a longer number, or has another site prefix, are skipped. Skipped folders whose name contains an ID-shaped
+        number are named in a warning.
     """
     registered = {
         "123-456789/094-000131": "094-000131",
@@ -139,3 +142,6 @@ def test_registration_reads_subject_id_from_path(tmp_path, monkeypatch):
     assert found == {
         str(tmp_path / folder / "record.pdf"): subject_id for folder, subject_id in registered.items()
     }
+    warned = sorted(record.getMessage().rsplit(": ", 1)[1] for record in caplog.records
+                    if record.levelname == "WARNING")
+    assert warned == sorted(str(tmp_path / folder) for folder in skipped if folder != "095-000134")

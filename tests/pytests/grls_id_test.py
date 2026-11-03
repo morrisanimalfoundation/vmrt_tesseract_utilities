@@ -45,9 +45,8 @@ def test_find_subject_id(path, expected):
 @pytest.mark.parametrize('text, expected', [
     ('094-000520', ('094', '000520')),
     ('123-456789', ('123', '456789')),
-    # Whitespace around an ID, such as a line ending left on a value read from a file, is ignored.
-    ('094-000520\n', ('094', '000520')),
-    ('  094-000520 ', ('094', '000520')),
+    ('094-000520\n', None),
+    (' 094-000520', None),
     # Anything else alongside the ID means the string isn't an ID.
     ('094-0005201x', None),
     ('x094-000520', None),

@@ -120,7 +120,8 @@ Change the path to the folder on **your** computer that holds the EMR PDFs. Two 
 
 The folder must already exist. The scripts look for the dog's subject ID (`094-` followed by six digits,
 e.g. `094-000520`) somewhere in each file's folder path; files that are not under a folder named with a
-subject ID are skipped.
+subject ID are skipped. The ID can't touch other digits: a folder named `094-0001312` or `1094-000131` is
+skipped, with a warning in the log, rather than being filed under dog `094-000131`.
 
 > This edit is specific to your computer. **Do not commit it** — see [Working with git](#working-with-git).
 
