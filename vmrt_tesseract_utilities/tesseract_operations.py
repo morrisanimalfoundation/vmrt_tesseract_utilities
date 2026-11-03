@@ -79,6 +79,11 @@ class TesseractOperationBase(ABC):
         Pages stay in colour: rendering them in greyscale with poppler gives slightly different OCR text and
         confidence scores on colour scans than letting Tesseract do the conversion.
 
+        pdf2image returns each page as a PPM image, and tesserocr passes it on in that format, so Leptonica reads it
+        with its own PPM reader. The older libpng, libtiff, libwebp and libjpeg bundled in the tesserocr wheel aren't
+        used for our pages; keep it that way if this changes (e.g. converting the image first makes tesserocr pass a
+        BMP, which Leptonica also reads itself).
+
         Parameters
         ----------
         input_path: str
@@ -175,29 +180,31 @@ class TesseractOperationBlock(TesseractOperationBase):
 
     Notes
     -----
-    Each block is one line of text. Tesseract finds the lines with its full page layout analysis, then reads
-    each one as a single line from a slightly padded box: boxes cut tight to the text often come back empty.
+    Each block is one line of text. Each page is recognised once, as in page mode, and the result is split into
+    the lines Tesseract found, so block mode has the same words as page mode. Lines with no text (such as image
+    regions) are left out.
+
+    Reading each line again from a box cropped around it gave worse results on real records: boxes cut tight to
+    the text often came back empty, padded boxes picked up neighbouring lines in densely typed records, and the
+    padding that worked best changed between Tesseract versions.
     """
-    BOX_PADDING = 10
 
     def process_row(self, input_path: str) -> list:
         output = []
+        level = tesserocr.RIL.TEXTLINE
         with self._open_api() as api:
             for pg, image in self._iter_pages(input_path):
                 self._set_page(api, image)
-                api.SetPageSegMode(tesserocr.PSM.AUTO)
-                boxes = api.GetComponentImages(tesserocr.RIL.TEXTLINE, True)
-                api.SetPageSegMode(tesserocr.PSM.SINGLE_LINE)
-                for i, (_, box, _, _) in enumerate(boxes):
-                    x = max(0, box['x'] - self.BOX_PADDING)
-                    y = max(0, box['y'] - self.BOX_PADDING)
-                    w = min(box['w'] + 2 * self.BOX_PADDING, image.width - x)
-                    h = min(box['h'] + 2 * self.BOX_PADDING, image.height - y)
-                    api.SetRectangle(x, y, w, h)
-                    ocr_result = api.GetUTF8Text()
-                    box_confidence = api.MeanTextConf()
-                    print(f'Item {input_path}:{pg}:{i} had a confidence score of {box_confidence}.')
-                    output.append({'content': ocr_result, 'confidence': box_confidence, 'page': pg + 1, 'block': i + 1})
+                api.Recognize()
+                block = 0
+                for line in tesserocr.iterate_level(api.GetIterator(), level):
+                    ocr_result = line.GetUTF8Text(level) or ''
+                    if not ocr_result.strip():
+                        continue
+                    block += 1
+                    line_confidence = line.Confidence(level)
+                    print(f'Item {input_path}:{pg}:{block} had a confidence score of {line_confidence}.')
+                    output.append({'content': ocr_result, 'confidence': line_confidence, 'page': pg + 1, 'block': block})
         if not any(result['content'].strip() for result in output):
             raise NoTextFoundError(f'No recognizable text found in {input_path}.')
         return output

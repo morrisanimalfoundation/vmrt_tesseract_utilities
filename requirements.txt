@@ -201,7 +201,7 @@ srsly==2.5.4
     #   weasel
 sympy==1.14.0
     # via torch
-tesserocr==2.7.1
+tesserocr==2.12.0
     # via -r requirements.in
 thinc==8.3.11
     # via spacy

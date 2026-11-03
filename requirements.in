@@ -10,7 +10,7 @@ PyMySQL==1.1.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
 SQLAlchemy==2.0.37
-tesserocr==2.7.1
+tesserocr==2.12.0
 torch==2.14.1+cpu
 # Installed through presidio_analyzer[transformers]. Versions before 5.10.0 have known vulnerabilities, such as
 # arbitrary file writes and code execution while loading models (CVE-2026-9856, CVE-2026-4372, CVE-2026-5241).

@@ -130,7 +130,7 @@ subject ID are skipped.
 ./run.sh
 ```
 
-The first run downloads the prebuilt workspace image (about 1.4 GB) and the MySQL image, which takes a few
+The first run downloads the prebuilt workspace image (about 1 GB) and the MySQL image, which takes a few
 minutes depending on your connection. Later runs only download what has changed. When it finishes you will see
 a new prompt that looks something like this:
 
@@ -442,7 +442,7 @@ rather than with `git add .`, so nothing extra is swept in.
   it, so don't edit `requirements.txt` by hand. To regenerate it, run this from the repository folder, outside
   the container (it uses the same Python version as the Docker image):
   ```bash
-  docker run --rm -v "$PWD:/src" -w /src python:3.11 sh -c "pip install -q pip-tools==7.6.2 && pip-compile --strip-extras requirements.in"
+  docker run --rm -v "$PWD:/src" -w /src python:3.11-slim sh -c "pip install -q pip-tools==7.6.2 && pip-compile --strip-extras requirements.in"
   ```
   Existing pins are kept; add `--upgrade` only when you mean to update them. Keep `presidio_analyzer[transformers]`
   and `torch` in `requirements.in` (the PII scrubber needs them) and keep the CPU-only PyTorch index line at the

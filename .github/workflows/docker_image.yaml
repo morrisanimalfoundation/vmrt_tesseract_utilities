@@ -1,7 +1,7 @@
 # Builds the workspace Docker image for Intel (amd64) and Apple Silicon (arm64), tests it, and on
 # main publishes it to ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities, which run.sh pulls.
 # Pull requests are built and tested but not published. The weekly run picks up security updates to the
-# python:3.11 base image.
+# python:3.11-slim base image.
 name: Docker Image
 
 on:
