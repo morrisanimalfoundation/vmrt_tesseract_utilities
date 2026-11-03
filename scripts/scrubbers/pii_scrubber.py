@@ -3,6 +3,7 @@ import json
 import os
 import sys
 
+import yaml
 from presidio_analyzer import (AnalyzerEngine, Pattern, PatternRecognizer,
                                RecognizerResult)
 from presidio_analyzer.nlp_engine import NlpEngineProvider
@@ -43,6 +44,31 @@ def create_subject_id_recognizer() -> PatternRecognizer:
     return PatternRecognizer(supported_entity='ID', name='GrlsSubjectIdRecognizer', patterns=[SUBJECT_ID_PATTERN])
 
 
+def find_missing_model_folders(nlp_config_file: str) -> list[str]:
+    """
+    Lists the transformers model folders an NLP config names that don't exist.
+
+    The image has the scrubber's model in a fixed folder, which the config names by path. In an image built before
+    the model was added, or outside the image, the folder is missing, and transformers would otherwise report it as
+    an invalid Hugging Face model ID.
+
+    Parameters
+    ----------
+    nlp_config_file : str
+        The filename of the YAML configuration file for the NLP engine.
+
+    Returns
+    -------
+    list[str]
+        The missing folders. Models named by Hugging Face ID rather than by path are not checked.
+    """
+    with open(nlp_config_file) as f:
+        config = yaml.safe_load(f)
+    folders = [model['model_name']['transformers'] for model in config.get('models', [])
+               if isinstance(model.get('model_name'), dict) and 'transformers' in model['model_name']]
+    return [folder for folder in folders if os.path.isabs(folder) and not os.path.isdir(folder)]
+
+
 def create_nlp_engine(nlp_config_file: str) -> AnalyzerEngine:
     """
     Creates and configures a Presidio AnalyzerEngine.
@@ -63,9 +89,17 @@ def create_nlp_engine(nlp_config_file: str) -> AnalyzerEngine:
 
     Raises
     ------
+    FileNotFoundError
+        If a model folder the config names doesn't exist.
     Exception
-        If any error occurs during the creation of the NLP engine.
+        If any other error occurs during the creation of the NLP engine.
     """
+    missing = find_missing_model_folders(nlp_config_file)
+    if missing:
+        raise FileNotFoundError(
+            f'The PII scrubber model folder {", ".join(missing)} does not exist. The model is built into the '
+            f'workspace image, so run this inside a current image: ./run.sh pulls the latest one, or use '
+            f'./run.sh --build.')
     try:
         provider = NlpEngineProvider(conf_file=nlp_config_file)
         engine = provider.create_engine()

@@ -23,10 +23,20 @@ for module in ('presidio_analyzer', 'presidio_analyzer.nlp_engine.huggingface_to
                'en_core_web_sm'):
     pytest.importorskip(module, reason='The PII scrubber packages are only installed in the workspace image.')
 
+import yaml  # noqa: E402
+
 from scripts.scrubbers import pii_scrubber  # noqa: E402
 
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'scrubbers', 'config',
                            'stanford-deidentifier-base_nlp.yaml')
+
+# The model is built into the image, so it is missing anywhere else, even where the packages are installed.
+if pii_scrubber.find_missing_model_folders(CONFIG_FILE):
+    pytest.skip('The PII scrubber model is only in the workspace image.', allow_module_level=True)
+
+# The model the baseline below was recorded with, as the image's Dockerfile writes it to the model folder's REVISION
+# file. If the pin is updated, check the scrubbing quality and these counts before changing this.
+BASELINE_MODEL = 'StanfordAIMI/stanford-deidentifier-base@661b9c1c717d3165512d440abc3700c386aefab6'
 
 RECORD = """\
 Sunny Meadows Animal Hospital
@@ -85,9 +95,8 @@ MEDICAL_TEXT = [
     'Recheck in 6 months',
 ]
 
-# Detections per entity type in RECORD, recorded with the package versions in requirements.txt and revision
-# 661b9c1c717d3165512d440abc3700c386aefab6 of the StanfordAIMI/stanford-deidentifier-base model, the one the image
-# pins (see the Dockerfile). Updating the pin can change these. Low-scoring types that only fire on parts
+# Detections per entity type in RECORD, recorded with the package versions in requirements.txt and BASELINE_MODEL.
+# Updating the model's pin can change these. Low-scoring types that only fire on parts
 # of other entities (URL inside the email address, US_SSN and US_DRIVER_LICENSE on the subject ID) are left out
 # because they are noise, not what we rely on.
 BASELINE_COUNTS = {
@@ -235,3 +244,27 @@ def test_offset_is_rejected_with_until_done(monkeypatch):
     monkeypatch.setattr(sys, 'argv', ['pii_scrubber.py', 'output', '--until-done', '--offset', '10'])
     with pytest.raises(SystemExit):
         pii_scrubber.parse_args()
+
+
+def test_model_is_the_baseline_revision():
+    """
+    Test that the image's model is the revision the baseline counts were recorded with.
+    """
+    with open(CONFIG_FILE) as f:
+        model_dir = yaml.safe_load(f)['models'][0]['model_name']['transformers']
+    with open(os.path.join(model_dir, 'REVISION')) as f:
+        assert f.read().strip() == BASELINE_MODEL
+
+
+def test_missing_model_folder_is_reported(tmp_path):
+    """
+    Test that a config naming a model folder that doesn't exist fails with a clear error, as it would in an image
+    built before the model was added.
+    """
+    missing = str(tmp_path / 'no-such-model')
+    config_file = tmp_path / 'nlp.yaml'
+    with open(CONFIG_FILE) as f:
+        config_file.write_text(f.read().replace('/opt/models/stanford-deidentifier-base', missing))
+
+    with pytest.raises(FileNotFoundError, match='no-such-model'):
+        pii_scrubber.create_nlp_engine(str(config_file))
