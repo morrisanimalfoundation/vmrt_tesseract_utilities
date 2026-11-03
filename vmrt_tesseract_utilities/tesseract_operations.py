@@ -14,6 +14,14 @@ Provides Tesseract processing with different output scales (document, page, bloc
 """
 
 TESSDATA_PATH = '/usr/share/tessdata'
+# Pages that read with a mean confidence below this are checked for being sideways or upside down. Pages scanned
+# that way read at about 13 to 36; most upright pages read well above it.
+ORIENTATION_CHECK_BELOW_CONFIDENCE = 60
+# Tesseract's confidence in a detected orientation, below which it's treated as a guess and ignored. Turned pages,
+# real and synthetic, measured 2.5 to 14; a guess that turned a readable real page upside down measured 0.1.
+MIN_ORIENTATION_CONFIDENCE = 1.0
+# The models Tesseract needs: English text, and orientation and script detection (osd) for rotated pages.
+TESSDATA_MODELS = ('eng', 'osd')
 
 
 class NoTextFoundError(Exception):
@@ -42,7 +50,7 @@ def check_ocr_setup(tessdata_path: str = TESSDATA_PATH) -> None:
     Raises
     ------
     OcrSetupError
-      If poppler isn't installed, or Tesseract can't start with the given tessdata.
+      If poppler isn't installed, a Tesseract model is missing, or Tesseract can't start with the given tessdata.
     """
     missing = [tool for tool in ('pdfinfo', 'pdftoppm') if shutil.which(tool) is None]
     if missing:
@@ -50,11 +58,23 @@ def check_ocr_setup(tessdata_path: str = TESSDATA_PATH) -> None:
                             'pdf2image needs it to read PDFs.')
     if not os.path.isdir(tessdata_path):
         raise OcrSetupError(f'Tesseract data directory {tessdata_path} does not exist.')
+    # Without the osd model, Tesseract only warns and reads rotated pages as garbage, so check for it here.
+    missing = [model for model in TESSDATA_MODELS
+               if not os.path.isfile(os.path.join(tessdata_path, f'{model}.traineddata'))]
+    if missing:
+        raise OcrSetupError(f'Tesseract model(s) {", ".join(missing)} missing from {tessdata_path}.')
     try:
         with tesserocr.PyTessBaseAPI(tessdata_path):
             pass
     except RuntimeError as e:
         raise OcrSetupError(f'Tesseract could not start with the data in {tessdata_path}: {e}') from e
+    # The default start-up doesn't load the osd model, and OCR only warns if it can't, so load it on its own: a
+    # truncated or corrupt osd.traineddata fails here instead of quietly turning rotated pages into garbage.
+    try:
+        with tesserocr.PyTessBaseAPI(tessdata_path, lang='osd', psm=tesserocr.PSM.OSD_ONLY):
+            pass
+    except RuntimeError as e:
+        raise OcrSetupError(f'Tesseract could not load the osd model in {tessdata_path}: {e}') from e
 
 
 class TesseractOperationBase(ABC):
@@ -121,6 +141,98 @@ class TesseractOperationBase(ABC):
         return api
 
     @staticmethod
+    def _open_osd_api() -> tesserocr.PyTessBaseAPI:
+        """
+        Opens a Tesseract instance that only detects page orientation, to be reused for every page of one file.
+
+        Returns
+        -------
+        api: tesserocr.PyTessBaseAPI
+          The Tesseract instance; use it as a context manager so it is closed afterwards.
+        """
+        api = tesserocr.PyTessBaseAPI(TESSDATA_PATH, lang='osd', psm=tesserocr.PSM.OSD_ONLY)
+        api.SetVariable('debug_file', '/dev/null')
+        return api
+
+    @staticmethod
+    def _detect_rotation(osd_api: tesserocr.PyTessBaseAPI, image: Image.Image) -> int:
+        """
+        Detects how far a page is turned.
+
+        Returns
+        -------
+        int
+          The degrees to turn the page counter-clockwise to make it upright: 90, 180 or 270, or 0 if it is upright
+          or its orientation can't be told (for example, because it has too little text, or Tesseract is only
+          guessing).
+        """
+        osd_api.SetImage(image)
+        try:
+            result = osd_api.DetectOrientationScript()
+        except RuntimeError:
+            return 0
+        if not result or result.get('orient_conf', 0) < MIN_ORIENTATION_CONFIDENCE:
+            return 0
+        angle = result.get('orient_deg')
+        return angle if angle in (90, 180, 270) else 0
+
+    @staticmethod
+    def _reading_score(text: str, confidence: int) -> int:
+        """
+        How much confidently read text a reading has: its mean confidence times its number of words.
+
+        Mean confidence alone isn't enough to choose between two readings of a page: Tesseract can report a high
+        confidence for a reading with no text at all.
+
+        >>> TesseractOperationBase._reading_score('Weight 31.2 kg', 90)
+        270
+        >>> TesseractOperationBase._reading_score('', 95)
+        0
+        """
+        return confidence * len(text.split())
+
+    def _read_page(self, api: tesserocr.PyTessBaseAPI, osd_api: tesserocr.PyTessBaseAPI,
+                   image: Image.Image) -> tuple[str, int]:
+        """
+        Reads one page, turning it upright first if it was scanned sideways or upside down.
+
+        Notes
+        -----
+        A page that reads with low confidence is checked for its orientation. If it is turned, it is turned upright
+        and read again, and the reading with more confidently read text (see `_reading_score`) is kept. Pages scanned
+        upside down or turned 90 degrees counter-clockwise otherwise come out as garbage. Tesseract's AUTO_OSD mode,
+        which checks every page, was tried first: on real records it also turned some upright pages that read well,
+        ruining their text, and made OCR about 20% slower. tests/pytests/ocr_accuracy_test.py checks every
+        orientation.
+
+        Afterwards `api` holds the recognised version of the page that was kept, so its results can be iterated.
+
+        Returns
+        -------
+        text, confidence: tuple[str, int]
+          The page's text and mean confidence.
+        """
+        self._set_page(api, image)
+        text, confidence = api.GetUTF8Text(), api.MeanTextConf()
+        if confidence >= ORIENTATION_CHECK_BELOW_CONFIDENCE:
+            return text, confidence
+        angle = self._detect_rotation(osd_api, image)
+        if not angle:
+            return text, confidence
+        upright = image.rotate(angle, expand=True)
+        try:
+            self._set_page(api, upright)
+            upright_text, upright_confidence = api.GetUTF8Text(), api.MeanTextConf()
+        finally:
+            upright.close()
+        if self._reading_score(upright_text, upright_confidence) > self._reading_score(text, confidence):
+            return upright_text, upright_confidence
+        # Turning didn't help, so go back to the page as scanned.
+        self._set_page(api, image)
+        api.Recognize()
+        return text, confidence
+
+    @staticmethod
     def _set_page(api: tesserocr.PyTessBaseAPI, image: Image.Image) -> None:
         """
         Loads a page into a reused Tesseract instance.
@@ -141,11 +253,9 @@ class TesseractOperationDoc(TesseractOperationBase):
     def process_row(self, input_path: str) -> list:
         confidence_scores = []
         document_content = ''
-        with self._open_api() as api:
+        with self._open_api() as api, self._open_osd_api() as osd_api:
             for pg, image in self._iter_pages(input_path):
-                self._set_page(api, image)
-                ocr_result = api.GetUTF8Text()
-                confidence = api.MeanTextConf()
+                ocr_result, confidence = self._read_page(api, osd_api, image)
                 if ocr_result.strip() and confidence > 0:
                     document_content += "\n" + ocr_result
                     confidence_scores.append(confidence)
@@ -162,11 +272,9 @@ class TesseractOperationPage(TesseractOperationBase):
     """
     def process_row(self, input_path: str) -> list:
         output = []
-        with self._open_api() as api:
+        with self._open_api() as api, self._open_osd_api() as osd_api:
             for pg, image in self._iter_pages(input_path):
-                self._set_page(api, image)
-                ocr_result = api.GetUTF8Text()
-                page_confidence = api.MeanTextConf()
+                ocr_result, page_confidence = self._read_page(api, osd_api, image)
                 print(f'Item {input_path}:{pg} had a confidence score of {page_confidence}.')
                 output.append({'content': ocr_result, 'confidence': page_confidence, 'page': pg + 1, 'block': 0})
         if not any(result['content'].strip() for result in output):
@@ -192,10 +300,10 @@ class TesseractOperationBlock(TesseractOperationBase):
     def process_row(self, input_path: str) -> list:
         output = []
         level = tesserocr.RIL.TEXTLINE
-        with self._open_api() as api:
+        with self._open_api() as api, self._open_osd_api() as osd_api:
             for pg, image in self._iter_pages(input_path):
-                self._set_page(api, image)
-                api.Recognize()
+                # Recognises the page (turned upright if needed), so its lines can be iterated below.
+                self._read_page(api, osd_api, image)
                 block = 0
                 for line in tesserocr.iterate_level(api.GetIterator(), level):
                     ocr_result = line.GetUTF8Text(level) or ''

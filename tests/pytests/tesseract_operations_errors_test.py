@@ -20,6 +20,8 @@ def _fake_ocr(monkeypatch, pages: int, text: str, confidence: int) -> None:
     api = mock.MagicMock()
     api.GetUTF8Text.return_value = text
     api.MeanTextConf.return_value = confidence
+    # As real Tesseract does when it can't tell a page's orientation, e.g. because the page is blank.
+    api.DetectOrientationScript.return_value = None
     tess_api = mock.MagicMock()
     tess_api.return_value.__enter__.return_value = api
     monkeypatch.setattr(tesseract_operations.pdf2image, 'pdfinfo_from_path', lambda path: {'Pages': pages})
@@ -69,15 +71,18 @@ def test_unreadable_pdf_raises(monkeypatch):
         TesseractOperationDoc().process_row('broken.pdf')
 
 
-def _fake_setup(monkeypatch, tools=('pdfinfo', 'pdftoppm'), tessdata_exists=True, init_error=None):
+def _fake_setup(monkeypatch, tools=('pdfinfo', 'pdftoppm'), tessdata_exists=True, models=('eng', 'osd'),
+                init_error=None):
     """
-    Replaces the poppler lookup, the tessdata directory check and Tesseract start-up.
+    Replaces the poppler lookup, the tessdata directory and model checks, and Tesseract start-up.
     """
     tess_api = mock.MagicMock()
     if init_error:
         tess_api.side_effect = init_error
     monkeypatch.setattr(tesseract_operations.shutil, 'which', lambda tool: f'/usr/bin/{tool}' if tool in tools else None)
     monkeypatch.setattr(tesseract_operations.os.path, 'isdir', lambda path: tessdata_exists)
+    monkeypatch.setattr(tesseract_operations.os.path, 'isfile',
+                        lambda path: any(path.endswith(f'/{model}.traineddata') for model in models))
     monkeypatch.setattr(tesseract_operations.tesserocr, 'PyTessBaseAPI', tess_api)
 
 
@@ -114,6 +119,37 @@ def test_check_ocr_setup_missing_tessdata(monkeypatch):
     _fake_setup(monkeypatch, tessdata_exists=False)
     with pytest.raises(OcrSetupError, match='/nowhere/tessdata does not exist'):
         check_ocr_setup('/nowhere/tessdata')
+
+
+def test_check_ocr_setup_missing_osd_model(monkeypatch):
+    """
+    Test that a missing orientation model stops the run, since without it rotated pages are read as garbage.
+
+    Asserts:
+        OcrSetupError names the missing model.
+    """
+    _fake_setup(monkeypatch, models=('eng',))
+    with pytest.raises(OcrSetupError, match='osd missing from /usr/share/tessdata'):
+        check_ocr_setup()
+
+
+def test_check_ocr_setup_unreadable_osd_model(monkeypatch):
+    """
+    Test that an osd model Tesseract can't load (e.g. a truncated download) stops the run, since the default start-up
+    doesn't load it.
+
+    Asserts:
+        OcrSetupError names the osd model.
+    """
+    def tess_api(path, lang='eng', **kwargs):
+        if lang == 'osd':
+            raise RuntimeError('Failed to init API, possibly an invalid tessdata path')
+        return mock.MagicMock()
+
+    _fake_setup(monkeypatch)
+    monkeypatch.setattr(tesseract_operations.tesserocr, 'PyTessBaseAPI', tess_api)
+    with pytest.raises(OcrSetupError, match='could not load the osd model'):
+        check_ocr_setup()
 
 
 def test_check_ocr_setup_invalid_tessdata(monkeypatch):
