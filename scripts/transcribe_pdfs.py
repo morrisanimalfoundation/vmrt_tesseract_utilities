@@ -79,6 +79,48 @@ def _output_path(base_path: str, db_input: TranscriptionInput, ocr_result: dict)
     return f'{base_path}/{db_input.id}-{name}-{ocr_result["page"]}-{ocr_result["block"]}.txt'
 
 
+def parse_shard(value: str) -> tuple[int, int]:
+    """
+    Parses a `--shard` value: "i/N" means this run takes the inputs whose ID leaves remainder i when divided by N.
+
+    Several runs started with the same N and every i from 0 to N - 1 split the inputs between them. Unlike
+    `--offset`, the split doesn't move while other runs finish files, so no file is picked twice or skipped.
+
+    Parameters
+    ----------
+    value: str
+        The value, e.g. "0/4".
+
+    Returns
+    -------
+    tuple[int, int]
+        (i, N).
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        If the value isn't "i/N" with 0 <= i < N.
+
+    Examples
+    --------
+    >>> parse_shard('2/4')
+    (2, 4)
+    >>> parse_shard('4/4')
+    Traceback (most recent call last):
+        ...
+    argparse.ArgumentTypeError: '4/4': the shard number must be from 0 to 3.
+    """
+    try:
+        index, count = (int(part) for part in value.split('/'))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"'{value}': expected i/N, e.g. 0/4.")
+    if count < 1:
+        raise argparse.ArgumentTypeError(f"'{value}': the number of shards must be at least 1.")
+    if not 0 <= index < count:
+        raise argparse.ArgumentTypeError(f"'{value}': the shard number must be from 0 to {count - 1}.")
+    return index, count
+
+
 def run_tesseract(args: argparse.Namespace) -> None:
     """
     Runs a Tesseract strategy over the pages of a PDF.
@@ -88,6 +130,7 @@ def run_tesseract(args: argparse.Namespace) -> None:
     The process is documented in the `process_output` table.
     Each input's `ocr_status` is set to 'success' or 'failed', with the error saved in `ocr_error`.
     Failed inputs are skipped on later runs unless `--retry-failed` is passed.
+    With `--shard i/N`, only inputs whose ID leaves remainder i when divided by N are processed.
     Setup problems that would fail every file stop the run before any file is touched.
 
     Parameters
@@ -121,6 +164,9 @@ def run_tesseract(args: argparse.Namespace) -> None:
                  .where(TranscriptionOutput.ocr_output_file == None))  # noqa: E711
         if not args.retry_failed:
             query = query.where(TranscriptionInput.ocr_status.is_distinct_from('failed'))
+        if args.shard:
+            index, count = args.shard
+            query = query.where(TranscriptionInput.id % count == index)
         # Without an order, which rows --offset skips isn't defined and can change between runs.
         query = (query.order_by(TranscriptionInput.id, TranscriptionOutput.id)
                  .limit(args.chunk_size)
@@ -192,8 +238,7 @@ def parse_args() -> argparse.Namespace:
     args: argparse.Namespace
         The parsed args.
     """
-    parser = argparse.ArgumentParser(
-        prog='Outputs the change in two Fisher inventory files.')
+    parser = argparse.ArgumentParser(description='Run Tesseract OCR over the PDFs queued in the database.')
     parser.add_argument('output_to', help='Path to the output directory.')
     parser.add_argument('--document-type', type=str, default='document',
                         help='The document type we want to produce, document, page or block.')
@@ -203,6 +248,9 @@ def parse_args() -> argparse.Namespace:
                         help='The number of records to skip before beginning processing.')
     parser.add_argument('--retry-failed', action='store_true',
                         help='Also process files that failed on an earlier run.')
+    parser.add_argument('--shard', type=parse_shard, metavar='i/N',
+                        help='Only process inputs whose ID leaves remainder i when divided by N, so N runs started '
+                             'with 0/N to N-1/N can transcribe in parallel without picking the same file.')
     parser.add_argument('--debug-sql', action='store_true', help='Enable SQL debugging')
     return parser.parse_args(normalize_flag_spelling(sys.argv[1:]))
 

@@ -1,5 +1,6 @@
 import argparse
 import logging
+import sys
 
 import pytest
 from sqlalchemy import create_engine
@@ -43,9 +44,9 @@ def _fake_process_row(self, input_path):
     return [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1}]
 
 
-def _run(tmp_path, retry_failed=False):
+def _run(tmp_path, retry_failed=False, shard=None):
     args = argparse.Namespace(output_to=str(tmp_path), document_type='document', chunk_size=10,
-                              offset=0, retry_failed=retry_failed, debug_sql=False)
+                              offset=0, retry_failed=retry_failed, shard=shard, debug_sql=False)
     transcribe_pdfs.run_tesseract(args)
 
 
@@ -149,3 +150,93 @@ def test_setup_error_stops_run_before_any_file(monkeypatch, tmp_path, engine):
     with pytest.raises(OcrSetupError, match='Poppler'):
         _run(tmp_path)
     assert set(_statuses(engine).values()) == {(None, None)}
+
+
+def _recorder(seen):
+    def recording_process_row(self, input_path):
+        seen.append(input_path)
+        return [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1}]
+    return recording_process_row
+
+
+def test_shards_split_the_inputs_without_overlap(monkeypatch, tmp_path, engine):
+    """
+    Test that runs with --shard 0/2 and 1/2 between them transcribe every input exactly once.
+
+    The fixture's inputs have IDs 1 (good.pdf), 2 (blank.pdf) and 3 (broken.pdf). Shard 1/2 runs first, so shard
+    0/2 runs after those files are done: with --offset that would move its window, with --shard it must not.
+
+    Asserts:
+        Shard 1/2 takes IDs 1 and 3, shard 0/2 takes ID 2, a second round takes nothing, and every input succeeded.
+    """
+    seen = []
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', _recorder(seen))
+    _run(tmp_path, shard=(1, 2))
+    assert sorted(seen) == ['broken.pdf', 'good.pdf']
+    seen.clear()
+    _run(tmp_path, shard=(0, 2))
+    assert seen == ['blank.pdf']
+    seen.clear()
+    _run(tmp_path, shard=(0, 2))
+    _run(tmp_path, shard=(1, 2))
+    assert seen == []
+    assert set(_statuses(engine).values()) == {('success', None)}
+
+
+def test_no_shard_takes_every_input(monkeypatch, tmp_path, engine):
+    """
+    Test that a run without --shard still transcribes every input.
+
+    Asserts:
+        All three inputs are processed.
+    """
+    seen = []
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', _recorder(seen))
+    _run(tmp_path)
+    assert sorted(seen) == ['blank.pdf', 'broken.pdf', 'good.pdf']
+
+
+@pytest.mark.parametrize('value, expected', [('0/1', (0, 1)), ('3/4', (3, 4)), (' 1 / 2 ', (1, 2))])
+def test_parse_shard_accepts_valid_values(value, expected):
+    """
+    Test that "i/N" values with 0 <= i < N are parsed.
+
+    Asserts:
+        The value is returned as (i, N).
+    """
+    assert transcribe_pdfs.parse_shard(value) == expected
+
+
+@pytest.mark.parametrize('value, message', [
+    ('2', 'expected i/N'),
+    ('a/4', 'expected i/N'),
+    ('1/2/3', 'expected i/N'),
+    ('0/0', 'at least 1'),
+    ('4/4', 'from 0 to 3'),
+    ('-1/4', 'from 0 to 3'),
+])
+def test_parse_shard_rejects_invalid_values(value, message):
+    """
+    Test that a --shard value that isn't "i/N" with 0 <= i < N is rejected with a clear message.
+
+    Asserts:
+        argparse.ArgumentTypeError is raised, naming the problem.
+    """
+    with pytest.raises(argparse.ArgumentTypeError, match=message):
+        transcribe_pdfs.parse_shard(value)
+
+
+def test_shard_flag_is_parsed(monkeypatch):
+    """
+    Test that --shard reaches the parsed args as (i, N), and defaults to None.
+
+    Asserts:
+        `--shard 1/3` gives (1, 3); no flag gives None; a bad value exits with an argparse error.
+    """
+    monkeypatch.setattr(sys, 'argv', ['transcribe_pdfs.py', 'output', '--shard', '1/3'])
+    assert transcribe_pdfs.parse_args().shard == (1, 3)
+    monkeypatch.setattr(sys, 'argv', ['transcribe_pdfs.py', 'output'])
+    assert transcribe_pdfs.parse_args().shard is None
+    monkeypatch.setattr(sys, 'argv', ['transcribe_pdfs.py', 'output', '--shard', '3/3'])
+    with pytest.raises(SystemExit):
+        transcribe_pdfs.parse_args()
