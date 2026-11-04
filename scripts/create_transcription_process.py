@@ -107,6 +107,8 @@ def do_create_transcription_process(args: argparse.Namespace) -> None:
     """
     stdout_logger.info(f'Creating new transcription process with strategy "{args.document_type}".')
     registered = already_registered = not_pdf = too_long = failed = 0
+    # Every file reached, including one whose save is under way when an error stops the run.
+    looked_at = 0
     root = os.path.abspath(args.path_to_describe)
     sessionmaker = get_database_session(echo=args.debug_sql)
     try:
@@ -155,6 +157,7 @@ def do_create_transcription_process(args: argparse.Namespace) -> None:
                         )
                     continue
                 for file in files:
+                    looked_at += 1
                     filepath = subdir + os.sep + file
                     # Only the part below the root is checked, so a root folder named "._..." doesn't hide everything.
                     if not is_pdf_path(os.path.relpath(filepath, root).replace(os.sep, '/')):
@@ -187,7 +190,7 @@ def do_create_transcription_process(args: argparse.Namespace) -> None:
                     registered_paths.add(filepath)
                     registered += 1
     except Exception as e:
-        if registered or already_registered or not_pdf or too_long or failed:
+        if looked_at:
             stdout_logger.error(f'Registration failed and nothing from this run was saved. It had got as far as '
                                 f'{registered} new PDFs, {already_registered} already registered, {not_pdf} files '
                                 f'that aren\'t PDFs, {too_long} paths too long to store and {failed} rejected.')

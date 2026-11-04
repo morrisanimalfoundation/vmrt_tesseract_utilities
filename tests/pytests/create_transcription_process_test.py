@@ -411,13 +411,18 @@ def test_path_columns_hold_long_paths():
     assert {column.type.length for column in columns} == {PATH_LENGTH}
 
 
-def test_a_transaction_error_stops_registration(tmp_path, monkeypatch, caplog):
+@pytest.mark.parametrize("failing", ["a.pdf", "b.pdf", "c.pdf"])
+def test_a_transaction_error_stops_registration(tmp_path, monkeypatch, caplog, failing):
     """
     Test that an error that ends the transaction (a deadlock, a lost connection) stops the run, instead of being
     reported as one rejected file and carrying on with every remaining file failing the same way.
 
+    The failing file is each of the three in turn, since os.walk lists files in no fixed order: even when it's the
+    first file reached, the run had started on it, so the log must say how far it got.
+
     Asserts:
-        The OperationalError propagates, no file is reported as rejected, and nothing is saved.
+        The OperationalError propagates, no file is reported as rejected, the log says how far the run got, and
+        nothing is saved.
     """
     dog_dir = tmp_path / "094-000131"
     dog_dir.mkdir()
@@ -425,7 +430,7 @@ def test_a_transaction_error_stops_registration(tmp_path, monkeypatch, caplog):
         (dog_dir / name).write_text("test")
 
     def lose_connection(mapper, connection, target):
-        if target.input_file.endswith("b.pdf"):
+        if target.input_file.endswith(failing):
             raise OperationalError("INSERT", {}, Exception("Lost connection to MySQL server during query"))
 
     engine = _sqlite_engine()
@@ -439,5 +444,6 @@ def test_a_transaction_error_stops_registration(tmp_path, monkeypatch, caplog):
 
     assert "the database rejected it" not in caplog.text
     assert "Registration failed and nothing from this run was saved" in caplog.text
+    assert "before looking at any files" not in caplog.text
     with sessionmaker(bind=engine)() as session:
         assert session.query(TranscriptionInput).count() == 0
