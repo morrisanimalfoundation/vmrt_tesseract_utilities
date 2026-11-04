@@ -44,9 +44,9 @@ def _fake_process_row(self, input_path):
     return [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1}]
 
 
-def _run(tmp_path, retry_failed=False, shard=None):
-    args = argparse.Namespace(output_to=str(tmp_path), document_type='document', chunk_size=10,
-                              offset=0, retry_failed=retry_failed, shard=shard, debug_sql=False)
+def _run(tmp_path, retry_failed=False, shard=None, document_type='document', offset=0):
+    args = argparse.Namespace(output_to=str(tmp_path), document_type=document_type, chunk_size=10,
+                              offset=offset, retry_failed=retry_failed, shard=shard, debug_sql=False)
     transcribe_pdfs.run_tesseract(args)
 
 
@@ -196,7 +196,7 @@ def test_no_shard_takes_every_input(monkeypatch, tmp_path, engine):
     assert sorted(seen) == ['blank.pdf', 'broken.pdf', 'good.pdf']
 
 
-@pytest.mark.parametrize('value, expected', [('0/1', (0, 1)), ('3/4', (3, 4)), (' 1 / 2 ', (1, 2))])
+@pytest.mark.parametrize('value, expected', [('0/1', (0, 1)), ('3/4', (3, 4)), ('10/12', (10, 12))])
 def test_parse_shard_accepts_valid_values(value, expected):
     """
     Test that "i/N" values with 0 <= i < N are parsed.
@@ -211,9 +211,13 @@ def test_parse_shard_accepts_valid_values(value, expected):
     ('2', 'expected i/N'),
     ('a/4', 'expected i/N'),
     ('1/2/3', 'expected i/N'),
+    ('-1/4', 'expected i/N'),
+    # int() accepts all of these; --shard shouldn't.
+    ('+1/2', 'expected i/N'),
+    (' 1 / 2 ', 'expected i/N'),
+    ('1_0/2_0', 'expected i/N'),
     ('0/0', 'at least 1'),
     ('4/4', 'from 0 to 3'),
-    ('-1/4', 'from 0 to 3'),
 ])
 def test_parse_shard_rejects_invalid_values(value, message):
     """
@@ -240,3 +244,83 @@ def test_shard_flag_is_parsed(monkeypatch):
     monkeypatch.setattr(sys, 'argv', ['transcribe_pdfs.py', 'output', '--shard', '3/3'])
     with pytest.raises(SystemExit):
         transcribe_pdfs.parse_args()
+
+
+def _shard_database(monkeypatch, tmp_path, document_type, count):
+    """
+    A SQLite database with `count` PDFs of one document type waiting to be transcribed, IDs 1 to `count`.
+    """
+    monkeypatch.setattr(transcribe_pdfs, 'check_ocr_setup', lambda: None)
+    db_url = f'sqlite:///{tmp_path}/shards.db'
+    monkeypatch.setenv('SQL_CONNECTION_STRING', db_url)
+    engine = create_engine(db_url)
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        session.add_all(TranscriptionInput(document_type=document_type, input_file=f'{n}.pdf')
+                        for n in range(1, count + 1))
+        session.commit()
+    return engine
+
+
+@pytest.mark.parametrize('shard_count', [1, 2, 3, 4, 5])
+def test_shards_together_take_every_input_exactly_once(monkeypatch, tmp_path, shard_count):
+    """
+    Test that for each N, the shards 0/N to N-1/N between them transcribe all 23 inputs, each exactly once.
+
+    A run takes at most 10 files (the chunk size), so each shard is rerun until a round finds nothing, as the
+    README says to.
+
+    Asserts:
+        No input is processed twice, and every input is processed.
+    """
+    _shard_database(monkeypatch, tmp_path, 'document', 23)
+    seen = []
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', _recorder(seen))
+    for shard_index in range(shard_count):
+        while True:
+            before = len(seen)
+            _run(tmp_path, shard=(shard_index, shard_count))
+            if len(seen) == before:
+                break
+    assert len(seen) == len(set(seen))
+    assert sorted(seen) == sorted(f'{n}.pdf' for n in range(1, 24))
+
+
+def test_page_inputs_keep_all_their_pages_in_one_shard(monkeypatch, tmp_path):
+    """
+    Test sharding in page mode, where one input becomes several output rows.
+
+    The shard is chosen by the input's ID, so all of a PDF's pages are read by the same run.
+
+    Asserts:
+        Each input is read once, by the shard its ID belongs to, and ends up with one output row per page.
+    """
+    engine = _shard_database(monkeypatch, tmp_path, 'page', 4)
+    seen = []
+
+    def two_pages(self, input_path):
+        seen.append(input_path)
+        return [{'content': f'page {page}', 'confidence': 90, 'page': page, 'block': 1} for page in (1, 2)]
+
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationPage, 'process_row', two_pages)
+    _run(tmp_path, shard=(0, 2), document_type='page')
+    assert sorted(seen) == ['2.pdf', '4.pdf']
+    _run(tmp_path, shard=(1, 2), document_type='page')
+    assert sorted(seen) == ['1.pdf', '2.pdf', '3.pdf', '4.pdf']
+    with Session(engine) as session:
+        pages = {i.input_file: len(i.assets) for i in session.query(TranscriptionInput)}
+    assert pages == {'1.pdf': 2, '2.pdf': 2, '3.pdf': 2, '4.pdf': 2}
+
+
+def test_offset_counts_within_the_shard(monkeypatch, tmp_path):
+    """
+    Test that --offset with --shard skips files of that shard only.
+
+    Asserts:
+        Shard 0/2 of IDs 1 to 6 is 2, 4 and 6; with --offset 1 the run takes 4 and 6.
+    """
+    _shard_database(monkeypatch, tmp_path, 'document', 6)
+    seen = []
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', _recorder(seen))
+    _run(tmp_path, shard=(0, 2), offset=1)
+    assert sorted(seen) == ['4.pdf', '6.pdf']

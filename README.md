@@ -243,8 +243,13 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
   `--shard 0/N`, `--shard 1/N`, ... `--shard N-1/N`: each takes only the PDFs whose database ID leaves remainder
   `i` when divided by N, so no two runs pick the same file. Don't use `--offset` for this: it counts from the
   files still waiting, which shrinks as the other runs finish files, so parallel runs skip some files and repeat
-  others. Rerun each shard until it prints `Found 0 files to transcribe`. N can change between rounds, since a
-  file is only ever skipped once it's done.
+  others. Rerun each shard until it prints `Found 0 files to transcribe`.
+  - **Every run going at the same time must use the same N.** Nothing in the database marks a file as taken, so
+    runs with different N overlap (`0/2` and `0/3` both take ID 6) and OCR the same files twice, giving them
+    extra output rows. To change N, stop every run first; files they finished are skipped from then on, as are
+    files that failed (add `--retry-failed` to try those again).
+  - The split is even when database IDs go up by 1, which is MySQL's default. On a server set up to step IDs by
+    more (`auto_increment_increment`), some shards get no files.
 - `--threshold` (step 4) is the minimum confidence score, from 0 to 1, a detection needs before it is
   removed. The default `0.0` removes everything the model flags. Raising it lets identifiers through: some,
   such as ZIP codes and house numbers, score around 0.4. GRLS subject IDs written as `094-012345` (or with a

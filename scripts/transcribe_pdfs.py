@@ -1,5 +1,6 @@
 import argparse
 import os
+import re
 import sys
 from typing import LiteralString
 
@@ -85,6 +86,8 @@ def parse_shard(value: str) -> tuple[int, int]:
 
     Several runs started with the same N and every i from 0 to N - 1 split the inputs between them. Unlike
     `--offset`, the split doesn't move while other runs finish files, so no file is picked twice or skipped.
+    Nothing claims a file in the database, so this only holds while every run at the same time uses the same N:
+    0/2 and 0/3 both take ID 6. The split is even when IDs go up by 1, as MySQL's do by default.
 
     Parameters
     ----------
@@ -99,7 +102,7 @@ def parse_shard(value: str) -> tuple[int, int]:
     Raises
     ------
     argparse.ArgumentTypeError
-        If the value isn't "i/N" with 0 <= i < N.
+        If the value isn't "i/N", two whole numbers with nothing else, with 0 <= i < N.
 
     Examples
     --------
@@ -110,15 +113,16 @@ def parse_shard(value: str) -> tuple[int, int]:
         ...
     argparse.ArgumentTypeError: '4/4': the shard number must be from 0 to 3.
     """
-    try:
-        index, count = (int(part) for part in value.split('/'))
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"'{value}': expected i/N, e.g. 0/4.")
-    if count < 1:
+    # Not int() on each part: it also takes "+1", " 1 " and "1_0".
+    match = re.fullmatch(r'(\d+)/(\d+)', value)
+    if not match:
+        raise argparse.ArgumentTypeError(f"'{value}': expected i/N, two whole numbers such as 0/4.")
+    shard_index, shard_count = int(match.group(1)), int(match.group(2))
+    if shard_count < 1:
         raise argparse.ArgumentTypeError(f"'{value}': the number of shards must be at least 1.")
-    if not 0 <= index < count:
-        raise argparse.ArgumentTypeError(f"'{value}': the shard number must be from 0 to {count - 1}.")
-    return index, count
+    if shard_index >= shard_count:
+        raise argparse.ArgumentTypeError(f"'{value}': the shard number must be from 0 to {shard_count - 1}.")
+    return shard_index, shard_count
 
 
 def run_tesseract(args: argparse.Namespace) -> None:
@@ -165,8 +169,8 @@ def run_tesseract(args: argparse.Namespace) -> None:
         if not args.retry_failed:
             query = query.where(TranscriptionInput.ocr_status.is_distinct_from('failed'))
         if args.shard:
-            index, count = args.shard
-            query = query.where(TranscriptionInput.id % count == index)
+            shard_index, shard_count = args.shard
+            query = query.where(TranscriptionInput.id % shard_count == shard_index)
         # Without an order, which rows --offset skips isn't defined and can change between runs.
         query = (query.order_by(TranscriptionInput.id, TranscriptionOutput.id)
                  .limit(args.chunk_size)
