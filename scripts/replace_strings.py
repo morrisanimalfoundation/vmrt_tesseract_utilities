@@ -113,9 +113,11 @@ def get_replacer(strings_to_replace: List[str], replacement_string: str) -> Stri
         The replacer for these inputs.
     """
     global _replacer_cache
-    key = (tuple(strings_to_replace), replacement_string)
+    # Read once into a tuple, so the key and the replacer agree even if the targets are a one-shot iterable.
+    targets = tuple(strings_to_replace)
+    key = (targets, replacement_string)
     if _replacer_cache is None or _replacer_cache[0] != key:
-        _replacer_cache = (key, StringReplacer(strings_to_replace, replacement_string))
+        _replacer_cache = (key, StringReplacer(list(targets), replacement_string))
     return _replacer_cache[1]
 
 
@@ -436,8 +438,8 @@ def make_pass_hash(
         A tuple containing the SHA-256 pass hash and the effective ordered targets.
     """
     # Built through get_replacer so the files can reuse it: forked workers inherit it, and a run without
-    # multiprocessing uses it as it is.
-    effective_targets = get_replacer(target_strings, replacement_string).target_strings
+    # multiprocessing uses it as it is. The list is a copy, so changing the returned one can't change that replacer.
+    effective_targets = list(get_replacer(target_strings, replacement_string).target_strings)
 
     payload = json.dumps(
         {

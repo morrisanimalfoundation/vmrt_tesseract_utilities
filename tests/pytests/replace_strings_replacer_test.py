@@ -139,6 +139,50 @@ def test_pass_hash_is_the_same_with_a_cached_replacer(builds):
     assert len(builds) == 1
 
 
+def test_get_replacer_accepts_targets_that_can_only_be_read_once(builds):
+    """
+    Test that targets given as a one-shot iterable, such as a generator, still give a replacer with every target.
+    """
+    replacer = replace_strings.get_replacer((target for target in ['Max', 'Rex']), '<NAME>')
+
+    assert replacer.replace('Max met Rex') == '<NAME> met <NAME>'
+
+
+def test_a_failed_build_is_not_cached(monkeypatch):
+    """
+    Test that a replacer that fails to build isn't kept, so the next call tries again instead of failing or
+    returning half of one.
+    """
+    monkeypatch.setattr(replace_strings, '_replacer_cache', None)
+    attempts = []
+
+    class FlakyReplacer(StringReplacer):
+        def __init__(self, *args, **kwargs):
+            attempts.append(args)
+            if len(attempts) == 1:
+                raise RuntimeError('the first build fails')
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(replace_strings, 'StringReplacer', FlakyReplacer)
+
+    with pytest.raises(RuntimeError):
+        replace_strings.get_replacer(['Max'], '<NAME>')
+
+    assert replace_strings.get_replacer(['Max'], '<NAME>').replace('Max') == '<NAME>'
+    assert len(attempts) == 2
+
+
+def test_changing_the_targets_make_pass_hash_returns_does_not_change_the_cached_replacer(builds):
+    """
+    Test that the list make_pass_hash returns is a copy, so changing it can't change the replacer the files reuse.
+    """
+    _, targets = replace_strings.make_pass_hash(['Max', 'Maxwell'], '<NAME>')
+    targets.append('Rex')
+
+    assert replace_strings.get_replacer(['Max', 'Maxwell'], '<NAME>').target_strings == ['Max', 'Maxwell']
+    assert len(builds) == 1
+
+
 def test_a_run_builds_one_replacer_for_all_its_files(db, tmp_path, builds):
     """
     Test that a whole run over several files, the way the script starts one, builds a single replacer.
