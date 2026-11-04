@@ -1,7 +1,9 @@
 import logging
+import os
 from argparse import Namespace
 
-from sqlalchemy import create_engine
+import pytest
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 
 from scripts import create_transcription_process
@@ -150,12 +152,34 @@ def test_registration_reads_subject_id_from_path(tmp_path, monkeypatch, caplog):
     assert warned == sorted(str(tmp_path / folder) for folder in skipped if folder != "095-000134")
 
 
-def _register(tmp_path, monkeypatch):
+def _sqlite_engine():
     """
-    Registers the files under tmp_path as documents in an in-memory database, and returns the registered paths.
+    An in-memory SQLite database with the schema, set up so savepoints behave as they do in MySQL.
+
+    Python's sqlite3 driver doesn't send BEGIN, so releasing a savepoint would commit it on its own; this is the
+    fix from SQLAlchemy's SQLite documentation ("Serializable isolation / Savepoints / Transactional DDL").
     """
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
+
+    @event.listens_for(engine, "connect")
+    def no_driver_transactions(dbapi_connection, connection_record):
+        dbapi_connection.isolation_level = None
+
+    @event.listens_for(engine, "begin")
+    def emit_begin(connection):
+        connection.exec_driver_sql("BEGIN")
+
+    return engine
+
+
+def _register(tmp_path, monkeypatch, engine=None):
+    """
+    Registers the files under tmp_path as documents, in engine or a new in-memory database, and returns the
+    registered paths.
+    """
+    if engine is None:
+        engine = _sqlite_engine()
+        Base.metadata.create_all(engine)
     test_sessionmaker = sessionmaker(bind=engine)
     monkeypatch.setattr(create_transcription_process, "get_database_session", lambda **kwargs: test_sessionmaker)
     create_transcription_process.do_create_transcription_process(
@@ -182,32 +206,145 @@ def test_registration_only_registers_pdfs(tmp_path, monkeypatch, caplog):
         registered = _register(tmp_path, monkeypatch)
 
     assert registered == [str(dog_dir / "SCAN.PDF"), str(dog_dir / "record.pdf")]
-    assert "Registered 2 new PDFs. Skipped 0 already registered, 2 files that aren't PDFs, and 0 with paths too long" in caplog.text
+    assert ("Registered 2 new PDFs. Skipped 0 already registered, 2 files that aren't PDFs, 0 with paths too long "
+            "to store, and 0 the database rejected.") in caplog.text
 
 
-def test_registration_skips_paths_too_long_to_store(tmp_path, monkeypatch, caplog):
+def test_registration_skips_paths_too_long_for_the_live_column(tmp_path, monkeypatch, caplog):
     """
-    Test that a path longer than the database column is reported and skipped, and the other files still register.
+    Test that the length check uses the database's actual input_file width, not the model's.
 
-    Before, one such path made the insert fail, which rolled back the whole registration.
+    A database created before the column was widened keeps its old width. Here input_file is just wider than the
+    short path, so a longer path must be skipped with a warning (on MySQL it would otherwise fail the insert), and the database's
+    width is reported.
 
     Asserts:
-        The short path is registered, the long one isn't, a warning names it, and the summary counts it.
+        The short path is registered, the long one isn't, both warnings appear, and the summary counts it.
     """
     dog_dir = tmp_path / "094-000131"
     dog_dir.mkdir()
-    short = dog_dir / "record.pdf"
+    short = dog_dir / "a.pdf"
     short.write_text("test")
-    long_name = dog_dir / ("x" * 40 + ".pdf")
+    # Sized from the temporary folder's path, which varies.
+    width = len(str(short)) + 5
+    long_name = dog_dir / ("x" * 10 + ".pdf")
     long_name.write_text("test")
-    monkeypatch.setattr(create_transcription_process, "PATH_LENGTH", len(str(short)) + 5)
+    assert width < PATH_LENGTH
+
+    engine = _sqlite_engine()
+    with engine.begin() as connection:
+        connection.execute(text(
+            "CREATE TABLE transcription_input (id INTEGER PRIMARY KEY, document_type VARCHAR(30), created DATETIME, "
+            f"input_file VARCHAR({width}), ocr_status VARCHAR(20), ocr_error TEXT)"))
+    Base.metadata.create_all(engine)
 
     with caplog.at_level(logging.INFO, logger="import_utility"):
-        registered = _register(tmp_path, monkeypatch)
+        registered = _register(tmp_path, monkeypatch, engine)
 
     assert registered == [str(short)]
-    assert f"Not registered, the path is longer than {len(str(short)) + 5} characters: {long_name}" in caplog.text
-    assert "and 1 with paths too long to store." in caplog.text
+    assert f"input_file column holds {width} characters, not {PATH_LENGTH}" in caplog.text
+    assert f"Not registered, the path is longer than {width} characters: {long_name}" in caplog.text
+    assert "1 with paths too long to store" in caplog.text
+
+
+def test_registration_skips_apple_double_files(tmp_path, monkeypatch):
+    """
+    Test that macOS "._" files, which end in .pdf but aren't PDFs, aren't registered.
+
+    Asserts:
+        Only the real PDF is registered.
+    """
+    dog_dir = tmp_path / "094-000131"
+    dog_dir.mkdir()
+    (dog_dir / "Medical Records.pdf").write_text("test")
+    (dog_dir / "._Medical Records.pdf").write_text("test")
+
+    assert _register(tmp_path, monkeypatch) == [str(dog_dir / "Medical Records.pdf")]
+
+
+def test_registration_warns_about_non_pdfs_from_an_older_registration(tmp_path, monkeypatch, caplog):
+    """
+    Test that non-PDF rows left by a registration that took every file are counted and reported.
+
+    Asserts:
+        The warning gives the number of such rows, and the new PDF is still registered.
+    """
+    dog_dir = tmp_path / "094-000131"
+    dog_dir.mkdir()
+    (dog_dir / "record.pdf").write_text("test")
+    engine = _sqlite_engine()
+    Base.metadata.create_all(engine)
+    with sessionmaker(bind=engine)() as session:
+        session.add(TranscriptionInput(document_type="document", input_file=str(dog_dir / "LOCKFILE")))
+        session.commit()
+
+    with caplog.at_level(logging.INFO, logger="import_utility"):
+        registered = _register(tmp_path, monkeypatch, engine)
+
+    assert str(dog_dir / "record.pdf") in registered
+    assert '1 files already registered as "document" aren\'t PDFs' in caplog.text
+
+
+def test_a_rejected_file_doesnt_undo_the_others(tmp_path, monkeypatch, caplog):
+    """
+    Test that a file the database rejects is rolled back on its own, and the others are registered.
+
+    The rejection is simulated with a before_insert hook; on MySQL it could be an encoding or constraint error.
+
+    Asserts:
+        The other two PDFs and their metadata are registered, the rejected one isn't, a warning names it, and the
+        summary counts it.
+    """
+    dog_dir = tmp_path / "094-000131"
+    dog_dir.mkdir()
+    for name in ("a.pdf", "bad.pdf", "c.pdf"):
+        (dog_dir / name).write_text("test")
+
+    def reject(mapper, connection, target):
+        if target.input_file.endswith("bad.pdf"):
+            raise ValueError("rejected for the test")
+
+    event.listen(TranscriptionInput, "before_insert", reject)
+    try:
+        with caplog.at_level(logging.INFO, logger="import_utility"):
+            engine = _sqlite_engine()
+            Base.metadata.create_all(engine)
+            registered = _register(tmp_path, monkeypatch, engine)
+    finally:
+        event.remove(TranscriptionInput, "before_insert", reject)
+
+    assert registered == [str(dog_dir / "a.pdf"), str(dog_dir / "c.pdf")]
+    with sessionmaker(bind=engine)() as session:
+        assert session.query(TranscriptionMetadata).count() == 2
+    assert f"Not registered, the database rejected it (ValueError: rejected for the test): {dog_dir / 'bad.pdf'}" in caplog.text
+    assert "and 1 the database rejected." in caplog.text
+
+
+def test_a_failed_registration_logs_how_far_it_got(tmp_path, monkeypatch, caplog):
+    """
+    Test that if registration fails part way, the error is raised and what it had counted so far is logged.
+
+    Asserts:
+        The error propagates, the counts so far are logged, and nothing is saved.
+    """
+    dog_dir = tmp_path / "094-000131"
+    dog_dir.mkdir()
+    (dog_dir / "a.pdf").write_text("test")
+    real_walk = os.walk
+
+    def walk_then_fail(top):
+        yield from real_walk(top)
+        raise OSError("Dropbox folder went away")
+
+    monkeypatch.setattr(create_transcription_process.os, "walk", walk_then_fail)
+    engine = _sqlite_engine()
+    Base.metadata.create_all(engine)
+    with caplog.at_level(logging.INFO, logger="import_utility"), pytest.raises(OSError, match="went away"):
+        _register(tmp_path, monkeypatch, engine)
+
+    assert "Registration failed and nothing from this run was saved. It had got as far as 1 new PDFs" in caplog.text
+    with sessionmaker(bind=engine)() as session:
+        assert session.query(TranscriptionInput).count() == 0
 
 
 def test_path_columns_hold_long_paths():
