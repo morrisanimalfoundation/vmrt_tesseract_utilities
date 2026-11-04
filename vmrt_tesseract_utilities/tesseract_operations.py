@@ -27,9 +27,10 @@ TESSDATA_MODELS = ('eng', 'osd')
 # The resolution pages are rendered at, pdf2image's default.
 RENDER_DPI = 200
 # The most pixels a rendered page may have. A page too large to render at RENDER_DPI within this is rendered at a
-# lower resolution instead. Pillow warns about images larger than its default limit, and refuses to open ones over
-# twice it, which is how a scan with a page size of several feet failed. A page this size takes about 270 MB.
-MAX_PAGE_PIXELS = Image.MAX_IMAGE_PIXELS
+# lower resolution instead. It's Pillow's default image size limit (Image.MAX_IMAGE_PIXELS): Pillow warns about
+# larger images and refuses to open ones over twice the limit, which is how a scan with a page size of several feet
+# failed. A page this size takes about 270 MB.
+MAX_PAGE_PIXELS = 89_478_485
 POINTS_PER_INCH = 72
 
 
