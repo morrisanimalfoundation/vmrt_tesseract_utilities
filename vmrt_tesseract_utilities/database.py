@@ -15,6 +15,11 @@ load_dotenv()
 Database models and related utilities.
 """
 
+# The longest file path the path columns hold. EMR paths have reached 284 characters (non-PDF files) and 251 (PDFs),
+# and output paths add up to about 90 characters of folders to the PDF's name. In MySQL, input_file is part of a
+# unique index, which with utf8mb4 allows at most 768 characters across its columns.
+PATH_LENGTH = 512
+
 
 class Base(DeclarativeBase):
     """
@@ -32,7 +37,7 @@ class TranscriptionInput(Base):
     document_type: Mapped[str] = mapped_column(String(30))
     created: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, server_default=func.now())
     input_file: Mapped[Optional[str]] = mapped_column(
-        String(255).with_variant(VARCHAR(255, collation='utf8mb4_0900_bin'), 'mysql')
+        String(PATH_LENGTH).with_variant(VARCHAR(PATH_LENGTH, collation='utf8mb4_0900_bin'), 'mysql')
     )
     # 'success' or 'failed' once transcribe_pdfs has tried this file, None before that.
     ocr_status: Mapped[Optional[str]] = mapped_column(String(20))
@@ -63,11 +68,11 @@ class TranscriptionOutput(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     input_id: Mapped[int] = mapped_column(ForeignKey('transcription_input.id'))
     transcription_input: Mapped['TranscriptionInput'] = relationship(back_populates='assets')
-    ocr_output_file: Mapped[Optional[str]] = mapped_column(String(255))
+    ocr_output_file: Mapped[Optional[str]] = mapped_column(String(PATH_LENGTH))
     ocr_confidence: Mapped[Optional[float]] = mapped_column(Float)
-    list_replacement_output_file: Mapped[Optional[str]] = mapped_column(String(255))
-    pii_scrubber_output_file: Mapped[Optional[str]] = mapped_column(String(255))
-    pii_scrubber_confidence_file: Mapped[Optional[str]] = mapped_column(String(255))
+    list_replacement_output_file: Mapped[Optional[str]] = mapped_column(String(PATH_LENGTH))
+    pii_scrubber_output_file: Mapped[Optional[str]] = mapped_column(String(PATH_LENGTH))
+    pii_scrubber_confidence_file: Mapped[Optional[str]] = mapped_column(String(PATH_LENGTH))
 
     def __repr__(self) -> str:
         return f'Transcription Output (id={self.id})!r'

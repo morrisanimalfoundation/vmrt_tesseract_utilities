@@ -156,7 +156,8 @@ Run these five commands in order, inside the container, from `/workspace`. Wait 
 before starting the next. The copy-paste versions below use the default settings.
 
 **1. Register files for processing** — walks `/data`, reads each dog's subject ID from the folder path, and
-queues the files. Run this **once** per session; running it again queues every file a second time.
+queues the PDFs (other files in the folders, such as image viewer exports, are skipped). Running it again only
+adds PDFs that aren't registered yet, so rerun it after new records arrive.
 
 ```bash
 python scripts/create_transcription_process.py /data

@@ -3,7 +3,7 @@ import os
 import sys
 
 from vmrt_tesseract_utilities.cli import normalize_flag_spelling
-from vmrt_tesseract_utilities.database import (TranscriptionInput,
+from vmrt_tesseract_utilities.database import (PATH_LENGTH, TranscriptionInput,
                                                TranscriptionMetadata,
                                                get_database_session)
 from vmrt_tesseract_utilities.grls_id import (find_subject_id,
@@ -22,6 +22,9 @@ def do_create_transcription_process(args: argparse.Namespace) -> None:
     Notes
     -----
     These input assets may then be picked up by future processes.
+    Only PDFs are registered, since they're all the OCR step reads; the EMR folders also hold image viewer exports,
+    lock files and the like. A path longer than the database can store is reported and skipped, rather than
+    stopping the whole registration.
 
     Parameters
     ----------
@@ -30,6 +33,8 @@ def do_create_transcription_process(args: argparse.Namespace) -> None:
     """
     stdout_logger.info(f'Creating new transcription process with strategy "{args.document_type}".')
     assets = []
+    registered = already_registered = not_pdf = 0
+    too_long = []
     sessionmaker = get_database_session(echo=args.debug_sql)
     with sessionmaker.begin() as session:
         registered_paths = {
@@ -50,9 +55,16 @@ def do_create_transcription_process(args: argparse.Namespace) -> None:
                     )
                 continue
             for file in files:
+                if not file.lower().endswith('.pdf'):
+                    not_pdf += 1
+                    continue
                 filepath = subdir + os.sep + file
                 if filepath in registered_paths:
                     stdout_logger.info(f"Already registered, skipping: {filepath}")
+                    already_registered += 1
+                    continue
+                if len(filepath) > PATH_LENGTH:
+                    too_long.append(filepath)
                     continue
                 stdout_logger.info(f'Adding to process: {filepath}')
                 input = TranscriptionInput(input_file=filepath, document_type=args.document_type)
@@ -62,8 +74,13 @@ def do_create_transcription_process(args: argparse.Namespace) -> None:
                 assets.append(input)
                 assets.append(metadata)
                 registered_paths.add(filepath)
+                registered += 1
         session.add_all(assets)
-    stdout_logger.info('All done!')
+    for filepath in too_long:
+        stdout_logger.warning(f'Not registered, the path is longer than {PATH_LENGTH} characters: {filepath}')
+    stdout_logger.info(f'All done! Registered {registered} new PDFs. Skipped {already_registered} already '
+                       f'registered, {not_pdf} files that aren\'t PDFs, and {len(too_long)} with paths too long '
+                       f'to store.')
 
 
 def parse_args() -> argparse.Namespace:
@@ -76,7 +93,7 @@ def parse_args() -> argparse.Namespace:
         The parsed args.
     """
     parser = argparse.ArgumentParser(
-        prog='Creates a new transcription process by scanning a directory of medical records.',)
+        description='Registers the PDFs in a directory of medical records for processing.')
     parser.add_argument('path_to_describe', help='The path to the EMRs we want to describe.')
     parser.add_argument('--document-type', type=str, default='document',
                         help='The document type we want to produce, document, page or block.')
