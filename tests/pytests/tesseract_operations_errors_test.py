@@ -24,7 +24,7 @@ def _fake_ocr(monkeypatch, pages: int, text: str, confidence: int) -> None:
     api.DetectOrientationScript.return_value = None
     tess_api = mock.MagicMock()
     tess_api.return_value.__enter__.return_value = api
-    monkeypatch.setattr(tesseract_operations.pdf2image, 'pdfinfo_from_path', lambda path: {'Pages': pages})
+    monkeypatch.setattr(tesseract_operations.pdf2image, 'pdfinfo_from_path', lambda path, **kwargs: {'Pages': pages})
     monkeypatch.setattr(tesseract_operations.pdf2image, 'convert_from_path', lambda path, **kwargs: [mock.MagicMock()])
     monkeypatch.setattr(tesseract_operations.tesserocr, 'PyTessBaseAPI', tess_api)
 
@@ -69,6 +69,41 @@ def test_unreadable_pdf_raises(monkeypatch):
     monkeypatch.setattr(tesseract_operations.pdf2image, 'pdfinfo_from_path', broken)
     with pytest.raises(ValueError, match='page count'):
         TesseractOperationDoc().process_row('broken.pdf')
+
+
+@pytest.mark.parametrize('size, expected_dpi', [
+    ('612 x 792 pts (letter)', 200),
+    # The page that failed on real records: 188,817,300 pixels at 200 dpi.
+    ('4248 x 5760 pts', 137),
+    # pdfinfo didn't report a size.
+    (None, 200),
+])
+def test_large_pages_render_at_lower_resolution(monkeypatch, size, expected_dpi):
+    """
+    Test that a page too large to render at 200 dpi within Pillow's size limit is rendered at a lower resolution.
+
+    Asserts:
+        Each page is rendered at the expected resolution, and its text is still read.
+    """
+    _fake_ocr(monkeypatch, pages=2, text='Patient is a good dog.', confidence=80)
+
+    def pdfinfo(path, first_page=None, last_page=None):
+        info = {'Pages': 2}
+        if first_page and size:
+            info[f'Page {first_page:4d} size'] = size
+        return info
+
+    rendered = []
+
+    def convert(path, **kwargs):
+        rendered.append((kwargs['first_page'], kwargs['dpi']))
+        return [mock.MagicMock()]
+
+    monkeypatch.setattr(tesseract_operations.pdf2image, 'pdfinfo_from_path', pdfinfo)
+    monkeypatch.setattr(tesseract_operations.pdf2image, 'convert_from_path', convert)
+    output = TesseractOperationDoc().process_row('large.pdf')
+    assert rendered == [(1, expected_dpi), (2, expected_dpi)]
+    assert 'good dog' in output[0]['content']
 
 
 def _fake_setup(monkeypatch, tools=('pdfinfo', 'pdftoppm'), tessdata_exists=True, models=('eng', 'osd'),

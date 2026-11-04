@@ -1,4 +1,6 @@
+import math
 import os
+import re
 import shutil
 from abc import ABC, abstractmethod
 from typing import Iterator
@@ -22,6 +24,13 @@ ORIENTATION_CHECK_BELOW_CONFIDENCE = 60
 MIN_ORIENTATION_CONFIDENCE = 1.0
 # The models Tesseract needs: English text, and orientation and script detection (osd) for rotated pages.
 TESSDATA_MODELS = ('eng', 'osd')
+# The resolution pages are rendered at, pdf2image's default.
+RENDER_DPI = 200
+# The most pixels a rendered page may have. A page too large to render at RENDER_DPI within this is rendered at a
+# lower resolution instead. Pillow warns about images larger than its default limit, and refuses to open ones over
+# twice it, which is how a scan with a page size of several feet failed. A page this size takes about 270 MB.
+MAX_PAGE_PIXELS = Image.MAX_IMAGE_PIXELS
+POINTS_PER_INCH = 72
 
 
 class NoTextFoundError(Exception):
@@ -117,7 +126,8 @@ class TesseractOperationBase(ABC):
         page_count = pdf2image.pdfinfo_from_path(input_path)['Pages']
         stdout_logger.info(f'Item {input_path} has {page_count} pages.')
         for pg in range(page_count):
-            images = pdf2image.convert_from_path(input_path, first_page=pg + 1, last_page=pg + 1)
+            dpi = TesseractOperationBase._render_dpi(input_path, pg)
+            images = pdf2image.convert_from_path(input_path, dpi=dpi, first_page=pg + 1, last_page=pg + 1)
             image = images[0]
             del images
             try:
@@ -125,6 +135,56 @@ class TesseractOperationBase(ABC):
             finally:
                 # Also runs if the caller stops part way through, e.g. because OCR on this page failed.
                 image.close()
+
+    @staticmethod
+    def _render_dpi(input_path: str, page_index: int) -> int:
+        """
+        Chooses the resolution to render a page at: RENDER_DPI, or lower if the page would then have more than
+        MAX_PAGE_PIXELS pixels.
+
+        A page that size is almost always a scan whose page size was set wrong, so it's several feet across, and
+        its text is still large enough to read at the lower resolution.
+
+        Parameters
+        ----------
+        input_path: str
+          The path to the PDF.
+        page_index: int
+          The zero-based page index.
+
+        Returns
+        -------
+        dpi: int
+          The resolution, RENDER_DPI if pdfinfo doesn't report the page's size.
+        """
+        page = page_index + 1
+        info = pdf2image.pdfinfo_from_path(input_path, first_page=page, last_page=page)
+        size = next((value for key, value in info.items() if re.fullmatch(rf'Page\s+{page} size', key)), '')
+        match = re.match(r'([\d.]+) x ([\d.]+) pts', size)
+        if not match:
+            return RENDER_DPI
+        width, height = (float(points) / POINTS_PER_INCH for points in match.groups())
+        dpi = TesseractOperationBase._fit_dpi(width, height)
+        if dpi < RENDER_DPI:
+            stdout_logger.info(f'Item {input_path}: page {page} is {width:.0f} x {height:.0f} inches, so it is '
+                               f'rendered at {dpi} dpi instead of {RENDER_DPI}.')
+        return dpi
+
+    @staticmethod
+    def _fit_dpi(width: float, height: float) -> int:
+        """
+        The highest resolution, up to RENDER_DPI, at which a page of the given size in inches has at most
+        MAX_PAGE_PIXELS pixels (or 1 dpi, for a page too large for even that).
+
+        >>> TesseractOperationBase._fit_dpi(8.5, 11)
+        200
+        >>> TesseractOperationBase._fit_dpi(59, 80)
+        137
+        """
+        # Rounded down, and poppler rounds the image size up by at most a pixel per side, which rounding the
+        # resolution down more than makes up for at these sizes.
+        dpi = math.floor(math.sqrt(MAX_PAGE_PIXELS / (width * height)))
+        return max(1, min(RENDER_DPI, dpi))
 
     @staticmethod
     def _open_api() -> tesserocr.PyTessBaseAPI:
