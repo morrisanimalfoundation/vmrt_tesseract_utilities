@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 
 import pytest
@@ -73,12 +74,36 @@ def test_large_page_is_rendered_within_pixel_limit(pdf_path, monkeypatch):
     monkeypatch.setattr(tesseract_operations, 'MAX_PAGE_PIXELS', 1_000_000)
     sizes = [image.size for _, image in TesseractOperationBase._iter_pages(pdf_path)]
     assert all(width * height <= 1_000_000 for width, height in sizes)
-    # 103 dpi rather than 200.
-    assert sizes[0] == (876, 1133)
+    # About 100 dpi rather than 200: 1700 x 2200 pixels.
+    assert all(800 < width < 900 for width, _ in sizes)
     output = TesseractOperationDoc().process_row(pdf_path)
     for lines in PAGE_LINES:
         for line in lines:
             assert line in output[0]['content']
+
+
+def _with_crop_box(source: str, path, crop_box: str) -> str:
+    """
+    Copies a one-page PDF written by Pillow, adding a CropBox to its page. Poppler rebuilds the cross-reference
+    table the insertion invalidates.
+    """
+    data = open(source, 'rb').read()
+    media_box = re.search(rb'/MediaBox \[[^\]]*\]', data).group(0)
+    path.write_bytes(data.replace(media_box, media_box + b' /CropBox [ ' + crop_box.encode() + b' ]', 1))
+    return str(path)
+
+
+@pytest.mark.parametrize('crop_box', ['0 0 306 396', '700 0 800 100'])
+def test_page_size_is_the_rendered_media_box(tmp_path, crop_box):
+    """
+    Test that page sizes come from the MediaBox, which pdf2image renders, not the CropBox pdfinfo reports as the
+    page size: a smaller one, or one outside the page that poppler clips to zero width.
+    """
+    source = write_pdf(str(tmp_path / 'letter.pdf'), [SyntheticPage(['Vaccines current'])])
+    path = _with_crop_box(source, tmp_path / 'cropped.pdf', crop_box)
+    assert tesseract_operations.page_sizes(path, 1) == {1: (8.5, 11.0)}
+    output = TesseractOperationDoc().process_row(path)
+    assert 'Vaccines current' in output[0]['content']
 
 
 def test_unreadable_file_raises(tmp_path):

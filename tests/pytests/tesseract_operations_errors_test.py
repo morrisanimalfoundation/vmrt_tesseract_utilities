@@ -4,7 +4,7 @@ import pytest
 
 from vmrt_tesseract_utilities import tesseract_operations
 from vmrt_tesseract_utilities.tesseract_operations import (
-    NoTextFoundError, OcrSetupError, TesseractOperationDoc,
+    NoTextFoundError, OcrSetupError, PageTooLargeError, TesseractOperationDoc,
     TesseractOperationPage, check_ocr_setup)
 
 """
@@ -24,9 +24,11 @@ def _fake_ocr(monkeypatch, pages: int, text: str, confidence: int) -> None:
     api.DetectOrientationScript.return_value = None
     tess_api = mock.MagicMock()
     tess_api.return_value.__enter__.return_value = api
-    monkeypatch.setattr(tesseract_operations.pdf2image, 'pdfinfo_from_path', lambda path, **kwargs: {'Pages': pages})
+    monkeypatch.setattr(tesseract_operations.pdf2image, 'pdfinfo_from_path', lambda path: {'Pages': pages})
     monkeypatch.setattr(tesseract_operations.pdf2image, 'convert_from_path', lambda path, **kwargs: [mock.MagicMock()])
     monkeypatch.setattr(tesseract_operations.tesserocr, 'PyTessBaseAPI', tess_api)
+    letter = {page: (8.5, 11.0) for page in range(1, pages + 1)}
+    monkeypatch.setattr(tesseract_operations, 'page_sizes', lambda path, page_count: letter)
 
 
 def test_doc_returns_average_confidence(monkeypatch):
@@ -72,38 +74,50 @@ def test_unreadable_pdf_raises(monkeypatch):
 
 
 @pytest.mark.parametrize('size, expected_dpi', [
-    ('612 x 792 pts (letter)', 200),
+    ((8.5, 11.0), 200),
     # The page that failed on real records: 188,817,300 pixels at 200 dpi.
-    ('4248 x 5760 pts', 137),
-    # pdfinfo didn't report a size.
+    ((59.0, 80.0), 194),
+    # pdfinfo didn't report the size, or reported a zero-width box.
     (None, 200),
+    ((0.0, 1.4), 200),
 ])
 def test_large_pages_render_at_lower_resolution(monkeypatch, size, expected_dpi):
     """
-    Test that a page too large to render at 200 dpi within Pillow's size limit is rendered at a lower resolution.
+    Test that a page too large to render at 200 dpi within Pillow's size limit is rendered at a lower resolution,
+    and a page of unknown size at 200 dpi.
 
     Asserts:
         Each page is rendered at the expected resolution, and its text is still read.
     """
     _fake_ocr(monkeypatch, pages=2, text='Patient is a good dog.', confidence=80)
-
-    def pdfinfo(path, first_page=None, last_page=None):
-        info = {'Pages': 2}
-        if first_page and size:
-            info[f'Page {first_page:4d} size'] = size
-        return info
-
+    sizes = {1: size, 2: size} if size else {}
+    monkeypatch.setattr(tesseract_operations, 'page_sizes', lambda path, page_count: sizes)
     rendered = []
 
     def convert(path, **kwargs):
         rendered.append((kwargs['first_page'], kwargs['dpi']))
         return [mock.MagicMock()]
 
-    monkeypatch.setattr(tesseract_operations.pdf2image, 'pdfinfo_from_path', pdfinfo)
     monkeypatch.setattr(tesseract_operations.pdf2image, 'convert_from_path', convert)
     output = TesseractOperationDoc().process_row('large.pdf')
     assert rendered == [(1, expected_dpi), (2, expected_dpi)]
     assert 'good dog' in output[0]['content']
+
+
+def test_page_too_large_to_read_raises(monkeypatch):
+    """
+    Test that a page that would have to be rendered below MIN_RENDER_DPI fails as too large, not as having no text.
+
+    Asserts:
+        PageTooLargeError is raised, and the page isn't rendered.
+    """
+    _fake_ocr(monkeypatch, pages=1, text='', confidence=0)
+    monkeypatch.setattr(tesseract_operations, 'page_sizes', lambda path, page_count: {1: (500.0, 500.0)})
+    convert = mock.MagicMock()
+    monkeypatch.setattr(tesseract_operations.pdf2image, 'convert_from_path', convert)
+    with pytest.raises(PageTooLargeError, match='500 x 500 inches'):
+        TesseractOperationDoc().process_row('huge.pdf')
+    convert.assert_not_called()
 
 
 def _fake_setup(monkeypatch, tools=('pdfinfo', 'pdftoppm'), tessdata_exists=True, models=('eng', 'osd'),
