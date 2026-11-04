@@ -3,7 +3,8 @@ import os
 from argparse import Namespace
 
 import pytest
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import MetaData, String, create_engine, event
+from sqlalchemy.exc import DataError, OperationalError
 from sqlalchemy.orm import sessionmaker
 
 from scripts import create_transcription_process
@@ -212,14 +213,14 @@ def test_registration_only_registers_pdfs(tmp_path, monkeypatch, caplog):
 
 def test_registration_skips_paths_too_long_for_the_live_column(tmp_path, monkeypatch, caplog):
     """
-    Test that the length check uses the database's actual input_file width, not the model's.
+    Test that the length check uses the database's actual column widths, not the model's.
 
-    A database created before the column was widened keeps its old width. Here input_file is just wider than the
-    short path, so a longer path must be skipped with a warning (on MySQL it would otherwise fail the insert), and the database's
-    width is reported.
+    A database created before the columns were widened keeps its old widths. Here the tables are the model's with
+    input_file just wider than the short path, and ocr_output_file narrow too.
 
     Asserts:
-        The short path is registered, the long one isn't, both warnings appear, and the summary counts it.
+        The short path is registered and the long one isn't; the warning names both narrow columns; the summary
+        counts the skipped path.
     """
     dog_dir = tmp_path / "094-000131"
     dog_dir.mkdir()
@@ -231,20 +232,63 @@ def test_registration_skips_paths_too_long_for_the_live_column(tmp_path, monkeyp
     long_name.write_text("test")
     assert width < PATH_LENGTH
 
+    # A copy of the model's tables with narrower path columns, as an old database would have.
+    old_schema = MetaData()
+    for table in Base.metadata.sorted_tables:
+        table.to_metadata(old_schema)
+    old_schema.tables["transcription_input"].c.input_file.type = String(width)
+    old_schema.tables["transcription_output"].c.ocr_output_file.type = String(255)
     engine = _sqlite_engine()
-    with engine.begin() as connection:
-        connection.execute(text(
-            "CREATE TABLE transcription_input (id INTEGER PRIMARY KEY, document_type VARCHAR(30), created DATETIME, "
-            f"input_file VARCHAR({width}), ocr_status VARCHAR(20), ocr_error TEXT)"))
-    Base.metadata.create_all(engine)
+    old_schema.create_all(engine)
 
     with caplog.at_level(logging.INFO, logger="import_utility"):
         registered = _register(tmp_path, monkeypatch, engine)
 
     assert registered == [str(short)]
-    assert f"input_file column holds {width} characters, not {PATH_LENGTH}" in caplog.text
+    assert (f"These path columns hold fewer than {PATH_LENGTH} characters, as the database was created before they "
+            f"were widened: transcription_input.input_file ({width}), transcription_output.ocr_output_file (255).") in caplog.text
     assert f"Not registered, the path is longer than {width} characters: {long_name}" in caplog.text
     assert "1 with paths too long to store" in caplog.text
+
+
+def test_the_model_tables_are_left_alone_by_the_narrow_copy():
+    """
+    Test that narrowing the copied tables in the test above didn't change the model's own columns.
+
+    Asserts:
+        input_file is still PATH_LENGTH wide.
+    """
+    assert TranscriptionInput.__table__.c.input_file.type.length == PATH_LENGTH
+
+
+def test_registration_needs_the_tables(tmp_path, monkeypatch, caplog):
+    """
+    Test that registering into a database with no tables says to install them, rather than looking like a failure
+    part way through.
+
+    Asserts:
+        RuntimeError names database_setup.py install, and the log says no files were looked at.
+    """
+    (tmp_path / "094-000131").mkdir()
+    with caplog.at_level(logging.INFO, logger="import_utility"), \
+            pytest.raises(RuntimeError, match="database_setup.py install"):
+        _register(tmp_path, monkeypatch, _sqlite_engine())
+    assert "Registration failed before looking at any files" in caplog.text
+    assert "got as far as" not in caplog.text
+
+
+def test_a_root_folder_named_like_apple_double_still_registers(tmp_path, monkeypatch):
+    """
+    Test that the "._" check applies only below the folder being registered, not to the folder itself.
+
+    Asserts:
+        The PDF inside a root folder named "._copy" is registered.
+    """
+    root = tmp_path / "._copy"
+    dog_dir = root / "094-000131"
+    dog_dir.mkdir(parents=True)
+    (dog_dir / "record.pdf").write_text("test")
+    assert _register(root, monkeypatch) == [str(dog_dir / "record.pdf")]
 
 
 def test_registration_skips_apple_double_files(tmp_path, monkeypatch):
@@ -266,8 +310,10 @@ def test_registration_warns_about_non_pdfs_from_an_older_registration(tmp_path, 
     """
     Test that non-PDF rows left by a registration that took every file are counted and reported.
 
+    Only rows the README's cleanup removes are counted: a non-PDF that was transcribed stays, so it isn't.
+
     Asserts:
-        The warning gives the number of such rows, and the new PDF is still registered.
+        The warning counts the untranscribed non-PDF only, and the new PDF is still registered.
     """
     dog_dir = tmp_path / "094-000131"
     dog_dir.mkdir()
@@ -276,6 +322,9 @@ def test_registration_warns_about_non_pdfs_from_an_older_registration(tmp_path, 
     Base.metadata.create_all(engine)
     with sessionmaker(bind=engine)() as session:
         session.add(TranscriptionInput(document_type="document", input_file=str(dog_dir / "LOCKFILE")))
+        # Transcribed, so the README's cleanup leaves it and the warning mustn't count it.
+        transcribed = TranscriptionInput(document_type="document", input_file=str(dog_dir / "._record.pdf"))
+        session.add(TranscriptionOutput(transcription_input=transcribed, ocr_output_file="out.txt"))
         session.commit()
 
     with caplog.at_level(logging.INFO, logger="import_utility"):
@@ -289,7 +338,8 @@ def test_a_rejected_file_doesnt_undo_the_others(tmp_path, monkeypatch, caplog):
     """
     Test that a file the database rejects is rolled back on its own, and the others are registered.
 
-    The rejection is simulated with a before_insert hook; on MySQL it could be an encoding or constraint error.
+    The rejection is simulated with a before_insert hook raising the DataError MySQL gives for a value the column
+    can't hold.
 
     Asserts:
         The other two PDFs and their metadata are registered, the rejected one isn't, a warning names it, and the
@@ -302,7 +352,7 @@ def test_a_rejected_file_doesnt_undo_the_others(tmp_path, monkeypatch, caplog):
 
     def reject(mapper, connection, target):
         if target.input_file.endswith("bad.pdf"):
-            raise ValueError("rejected for the test")
+            raise DataError("INSERT", {}, Exception("Data too long for column 'input_file'"))
 
     event.listen(TranscriptionInput, "before_insert", reject)
     try:
@@ -316,7 +366,7 @@ def test_a_rejected_file_doesnt_undo_the_others(tmp_path, monkeypatch, caplog):
     assert registered == [str(dog_dir / "a.pdf"), str(dog_dir / "c.pdf")]
     with sessionmaker(bind=engine)() as session:
         assert session.query(TranscriptionMetadata).count() == 2
-    assert f"Not registered, the database rejected it (ValueError: rejected for the test): {dog_dir / 'bad.pdf'}" in caplog.text
+    assert f"Not registered, the database rejected it (Exception: Data too long for column 'input_file'): {dog_dir / 'bad.pdf'}" in caplog.text
     assert "and 1 the database rejected." in caplog.text
 
 
@@ -359,3 +409,35 @@ def test_path_columns_hold_long_paths():
         TranscriptionOutput.__table__.c[name] for name in (
             "ocr_output_file", "list_replacement_output_file", "pii_scrubber_output_file", "pii_scrubber_confidence_file")]
     assert {column.type.length for column in columns} == {PATH_LENGTH}
+
+
+def test_a_transaction_error_stops_registration(tmp_path, monkeypatch, caplog):
+    """
+    Test that an error that ends the transaction (a deadlock, a lost connection) stops the run, instead of being
+    reported as one rejected file and carrying on with every remaining file failing the same way.
+
+    Asserts:
+        The OperationalError propagates, no file is reported as rejected, and nothing is saved.
+    """
+    dog_dir = tmp_path / "094-000131"
+    dog_dir.mkdir()
+    for name in ("a.pdf", "b.pdf", "c.pdf"):
+        (dog_dir / name).write_text("test")
+
+    def lose_connection(mapper, connection, target):
+        if target.input_file.endswith("b.pdf"):
+            raise OperationalError("INSERT", {}, Exception("Lost connection to MySQL server during query"))
+
+    engine = _sqlite_engine()
+    Base.metadata.create_all(engine)
+    event.listen(TranscriptionInput, "before_insert", lose_connection)
+    try:
+        with caplog.at_level(logging.INFO, logger="import_utility"), pytest.raises(OperationalError):
+            _register(tmp_path, monkeypatch, engine)
+    finally:
+        event.remove(TranscriptionInput, "before_insert", lose_connection)
+
+    assert "the database rejected it" not in caplog.text
+    assert "Registration failed and nothing from this run was saved" in caplog.text
+    with sessionmaker(bind=engine)() as session:
+        assert session.query(TranscriptionInput).count() == 0

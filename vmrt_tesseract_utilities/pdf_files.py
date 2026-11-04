@@ -22,7 +22,8 @@ def is_pdf_path(path: str) -> bool:
     Parameters
     ----------
     path: str
-        The file's path, with "/" between folders.
+        The file's path, with "/" between folders. Pass the part below the folder being searched, so the check for
+        "._" covers only folders and files inside it.
 
     Returns
     -------

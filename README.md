@@ -329,10 +329,10 @@ it, or copy it anywhere it is not supposed to be.
   DELETE m FROM transcription_metadata m
     JOIN transcription_input i ON m.input_id = i.id
     LEFT JOIN transcription_output o ON o.input_id = i.id
-    WHERE o.id IS NULL AND (LOWER(i.input_file) NOT LIKE '%.pdf' OR i.input_file LIKE '%/.\\_%');
+    WHERE o.id IS NULL AND (LOWER(i.input_file) NOT LIKE '%.pdf' OR i.input_file LIKE '%/.!_%' ESCAPE '!');
   DELETE i FROM transcription_input i
     LEFT JOIN transcription_output o ON o.input_id = i.id
-    WHERE o.id IS NULL AND (LOWER(i.input_file) NOT LIKE '%.pdf' OR i.input_file LIKE '%/.\\_%');
+    WHERE o.id IS NULL AND (LOWER(i.input_file) NOT LIKE '%.pdf' OR i.input_file LIKE '%/.!_%' ESCAPE '!');
   ```
 
 ## Reference data files
