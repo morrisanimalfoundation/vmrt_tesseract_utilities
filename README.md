@@ -156,7 +156,8 @@ Run these five commands in order, inside the container, from `/workspace`. Wait 
 before starting the next. The copy-paste versions below use the default settings.
 
 **1. Register files for processing** — walks `/data`, reads each dog's subject ID from the folder path, and
-queues the files. Run this **once** per session; running it again queues every file a second time.
+queues the PDFs (other files in the folders, such as image viewer exports, are skipped). Running it again only
+adds PDFs that aren't registered yet, so rerun it after new records arrive.
 
 ```bash
 python scripts/create_transcription_process.py /data
@@ -323,6 +324,26 @@ it, or copy it anywhere it is not supposed to be.
   ```sql
   ALTER TABLE string_replacement_completion
     ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'success', ADD COLUMN error TEXT;
+  ```
+  One created before the file path columns were widened to 512 characters stores paths of up to 255, and step 1
+  warns about it and skips longer paths. To widen them:
+  ```sql
+  ALTER TABLE transcription_input MODIFY input_file VARCHAR(512) COLLATE utf8mb4_0900_bin;
+  ALTER TABLE transcription_output
+    MODIFY ocr_output_file VARCHAR(512), MODIFY list_replacement_output_file VARCHAR(512),
+    MODIFY pii_scrubber_output_file VARCHAR(512), MODIFY pii_scrubber_confidence_file VARCHAR(512);
+  ```
+  And one registered before step 1 took only PDFs also holds every other file in the EMR folders (image viewer
+  exports, lock files and so on). Step 1 warns about these; OCR skips them, but they have metadata rows. To
+  remove the ones that were never transcribed (metadata first, as it points at the inputs):
+  ```sql
+  DELETE m FROM transcription_metadata m
+    JOIN transcription_input i ON m.input_id = i.id
+    LEFT JOIN transcription_output o ON o.input_id = i.id
+    WHERE o.id IS NULL AND (LOWER(i.input_file) NOT LIKE '%.pdf' OR i.input_file LIKE '%/.!_%' ESCAPE '!');
+  DELETE i FROM transcription_input i
+    LEFT JOIN transcription_output o ON o.input_id = i.id
+    WHERE o.id IS NULL AND (LOWER(i.input_file) NOT LIKE '%.pdf' OR i.input_file LIKE '%/.!_%' ESCAPE '!');
   ```
 
 ## Reference data files

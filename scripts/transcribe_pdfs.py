@@ -4,13 +4,12 @@ import re
 import sys
 from typing import LiteralString
 
-from sqlalchemy import func
-
 from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                TranscriptionOutput,
                                                get_database_session)
 from vmrt_tesseract_utilities.logging import stdout_logger
+from vmrt_tesseract_utilities.pdf_files import is_pdf_column
 from vmrt_tesseract_utilities.tesseract_operations import (
     OcrSetupError, TesseractOperationBlock, TesseractOperationDoc,
     TesseractOperationPage, check_ocr_setup)
@@ -162,8 +161,8 @@ def run_tesseract(args: argparse.Namespace) -> None:
     with sessionmaker() as session:
         query = (session.query(TranscriptionInput, TranscriptionOutput)
                  .outerjoin(TranscriptionInput.assets)
-                 # input_file has a case-sensitive collation, and file extensions can be in any case.
-                 .where(func.lower(TranscriptionInput.input_file).like('%.pdf'))
+                 # The same rule registration uses, so the two agree on which files are PDFs.
+                 .where(is_pdf_column(TranscriptionInput.input_file))
                  .where(TranscriptionInput.document_type == args.document_type)
                  .where(TranscriptionOutput.ocr_output_file == None))  # noqa: E711
         if not args.retry_failed:
