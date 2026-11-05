@@ -132,6 +132,113 @@ def test_failed_files_are_only_retried_when_asked(monkeypatch, tmp_path, engine)
     assert set(_statuses(engine).values()) == {('success', None)}
 
 
+class _Killed(BaseException):
+    """
+    Stands in for the process being killed part way through a PDF: like a SIGKILL, it isn't caught by the script's
+    `except Exception`, so nothing after it is recorded, but what was already committed stays.
+    """
+
+
+def _killed_on(*paths, calls=None):
+    """
+    A process_row that's "killed" on the given PDFs and reads the others, recording every PDF it's called for.
+    """
+    def process_row(self, input_path):
+        if calls is not None:
+            calls.append(input_path)
+        if input_path in paths:
+            raise _Killed()
+        return [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1}]
+    return process_row
+
+
+def test_pdf_is_marked_started_before_ocr(monkeypatch, tmp_path, engine):
+    """
+    Test that a PDF is saved as 'started' before OCR begins, so a kill part way through leaves a record of it.
+
+    Asserts:
+        While each PDF is being read, the database (seen from another session) has it as 'started'.
+    """
+    seen = {}
+
+    def checking_process_row(self, input_path):
+        seen[input_path] = _statuses(engine)[input_path][0]
+        return [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1}]
+
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', checking_process_row)
+    _run(tmp_path)
+    assert seen == {'good.pdf': 'started', 'blank.pdf': 'started', 'broken.pdf': 'started'}
+
+
+def test_pdf_cut_short_twice_is_marked_failed(monkeypatch, tmp_path, caplog, engine):
+    """
+    Test that a PDF whose OCR is cut short is tried once more, then marked failed, so it can't stop every run.
+
+    Asserts:
+        After the first kill it's 'started'; the next run retries it and leaves it 'retrying' when killed again;
+        the run after that marks it failed with the interrupted error without reading it, and carries on with the
+        other PDFs; after that it's skipped.
+    """
+    calls = []
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', _killed_on('blank.pdf', calls=calls))
+    with pytest.raises(_Killed):
+        _run(tmp_path)
+    assert _statuses(engine) == {'good.pdf': ('success', None), 'blank.pdf': ('started', None),
+                                 'broken.pdf': (None, None)}
+
+    with caplog.at_level(logging.INFO, logger='import_utility'), pytest.raises(_Killed):
+        _run(tmp_path)
+    assert 'blank.pdf: an earlier run was cut short while reading it, so it is tried once more.' in caplog.text
+    assert _statuses(engine)['blank.pdf'] == ('retrying', None)
+    assert calls == ['good.pdf', 'blank.pdf', 'blank.pdf']
+
+    calls.clear()
+    _run(tmp_path)
+    assert calls == ['broken.pdf']
+    assert _statuses(engine) == {'good.pdf': ('success', None),
+                                 'blank.pdf': ('failed', transcribe_pdfs.INTERRUPTED_TWICE_ERROR),
+                                 'broken.pdf': ('success', None)}
+
+    calls.clear()
+    _run(tmp_path)
+    assert calls == []
+
+
+def test_pdf_cut_short_once_succeeds_on_retry(monkeypatch, tmp_path, engine):
+    """
+    Test that a PDF cut short once, e.g. by a stopped build, is read normally on the next run.
+
+    Asserts:
+        It ends as 'success' with no error, and gets its output row.
+    """
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', _killed_on('good.pdf'))
+    with pytest.raises(_Killed):
+        _run(tmp_path)
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', _killed_on())
+    _run(tmp_path)
+    assert set(_statuses(engine).values()) == {('success', None)}
+    with Session(engine) as session:
+        assert session.query(TranscriptionOutput).count() == 3
+
+
+def test_retry_failed_tries_an_interrupted_pdf_again(monkeypatch, tmp_path, engine):
+    """
+    Test that --retry-failed tries a PDF that was marked failed for being cut short twice, from a fresh start.
+
+    Asserts:
+        It's read again and succeeds.
+    """
+    with Session(engine) as session:
+        session.query(TranscriptionInput).filter_by(input_file='blank.pdf').update(
+            {'ocr_status': 'failed', 'ocr_error': transcribe_pdfs.INTERRUPTED_TWICE_ERROR})
+        session.commit()
+    calls = []
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', _killed_on(calls=calls))
+    _run(tmp_path, retry_failed=True)
+    assert 'blank.pdf' in calls
+    assert _statuses(engine)['blank.pdf'] == ('success', None)
+
+
 def test_setup_error_stops_run_before_any_file(monkeypatch, tmp_path, engine):
     """
     Test that a setup problem stops the run instead of failing every file one by one.

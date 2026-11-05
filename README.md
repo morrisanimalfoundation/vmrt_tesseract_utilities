@@ -240,6 +240,10 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
   `transcription_input`), keeps going after a failure, and lists every failed file at the end. Failed files are
   skipped on later runs; pass `--retry-failed` to try them again. If poppler or Tesseract isn't usable, step 2
   stops before touching any file.
+- Step 2 marks each PDF `started` before reading it. If the run is killed part way through a PDF (it ran out of
+  memory, or the job was stopped), the next run finds it still `started` and tries it once more as `retrying`. If
+  that attempt is cut short too, the PDF is marked `failed` with an `OcrInterrupted` error and skipped from then
+  on, so one PDF that always runs out of memory can't stop every later run. `--retry-failed` tries it again.
 - Step 2 renders pages at 200 dpi. A page too large for that is rendered at the highest resolution that keeps it
   under Pillow's image size limit (179M pixels) and Tesseract's limit of 32,767 pixels on a side, and the log says
   which resolution it used. This is usually a scan whose page size was set to several feet across, or a long, thin

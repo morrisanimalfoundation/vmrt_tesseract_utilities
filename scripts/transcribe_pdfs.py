@@ -18,6 +18,12 @@ from vmrt_tesseract_utilities.tesseract_operations import (
 Runs Tesseract on items stored in the input database.
 """
 
+# The error saved for a PDF whose OCR was cut short twice, so a PDF that always gets its run killed (usually for
+# running out of memory) is skipped like any other failure instead of stopping every later run.
+INTERRUPTED_TWICE_ERROR = ('OcrInterrupted: OCR of this PDF was cut short twice before it could finish, most likely '
+                           'because its process was killed for running out of memory. Try it again with '
+                           '--retry-failed once more memory is available.')
+
 
 def _get_and_create_output_directory(args: argparse.Namespace) -> LiteralString | str | bytes:
     """
@@ -133,6 +139,9 @@ def run_tesseract(args: argparse.Namespace) -> None:
     The process is documented in the `process_output` table.
     Each input's `ocr_status` is set to 'success' or 'failed', with the error saved in `ocr_error`.
     Failed inputs are skipped on later runs unless `--retry-failed` is passed.
+    Before OCR starts, the input is saved as 'started', so a run that's killed part way through a PDF (by running
+    out of memory, or a stopped build) leaves a record of it. A later run tries a 'started' PDF once more, as
+    'retrying', and if that attempt is cut short too, marks it failed instead of trying again.
     With `--shard i/N`, only inputs whose ID leaves remainder i when divided by N are processed.
     Setup problems that would fail every file stop the run before any file is touched.
 
@@ -179,6 +188,22 @@ def run_tesseract(args: argparse.Namespace) -> None:
         failures = []
         for db_input, db_output in query.all():
             db_output_logs = []
+            if db_input.ocr_status == 'retrying':
+                error = INTERRUPTED_TWICE_ERROR
+                stdout_logger.error(f'Failed to transcribe {db_input.input_file}: {error}')
+                failures.append((db_input.input_file, error))
+                db_input.ocr_status = 'failed'
+                db_input.ocr_error = error
+                session.commit()
+                continue
+            if db_input.ocr_status == 'started':
+                stdout_logger.warning(f'Item {db_input.input_file}: an earlier run was cut short while reading it, '
+                                      f'so it is tried once more.')
+                db_input.ocr_status = 'retrying'
+            else:
+                db_input.ocr_status = 'started'
+            # Saved before OCR starts, so it's still there if this run is killed part way through the PDF.
+            session.commit()
             try:
                 output = op.process_row(db_input.input_file)
                 # Write every text file before touching the database, so a write error (disk full, permissions)
