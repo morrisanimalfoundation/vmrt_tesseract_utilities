@@ -228,10 +228,49 @@ def test_retry_failed_tries_an_interrupted_pdf_again(monkeypatch, tmp_path, engi
     Asserts:
         It's read again and succeeds.
     """
+    _set_status(engine, 'blank.pdf', 'failed', transcribe_pdfs.INTERRUPTED_TWICE_ERROR)
+    calls = []
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', _killed_on(calls=calls))
+    _run(tmp_path, retry_failed=True)
+    assert 'blank.pdf' in calls
+    assert _statuses(engine)['blank.pdf'] == ('success', None)
+
+
+def _set_status(engine, input_file: str, status: str, error: str = None) -> None:
     with Session(engine) as session:
-        session.query(TranscriptionInput).filter_by(input_file='blank.pdf').update(
-            {'ocr_status': 'failed', 'ocr_error': transcribe_pdfs.INTERRUPTED_TWICE_ERROR})
+        session.query(TranscriptionInput).filter_by(input_file=input_file).update(
+            {'ocr_status': status, 'ocr_error': error})
         session.commit()
+
+
+def test_retrying_a_failed_pdf_clears_its_old_error(monkeypatch, tmp_path, engine):
+    """
+    Test that a failed PDF retried with --retry-failed loses its old error while it's being read, so a run killed
+    part way through doesn't leave 'started' next to an error from an earlier attempt.
+
+    Asserts:
+        While it's read, it's ('started', None).
+    """
+    _set_status(engine, 'broken.pdf', 'failed', 'ValueError: Unable to get page count.')
+    seen = {}
+
+    def checking_process_row(self, input_path):
+        seen[input_path] = _statuses(engine)[input_path]
+        return [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1}]
+
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', checking_process_row)
+    _run(tmp_path, retry_failed=True)
+    assert seen['broken.pdf'] == ('started', None)
+
+
+def test_retry_failed_reads_a_retrying_pdf(monkeypatch, tmp_path, engine):
+    """
+    Test that --retry-failed reads a PDF left 'retrying', rather than marking it failed unread like a plain run.
+
+    Asserts:
+        It's read and succeeds.
+    """
+    _set_status(engine, 'blank.pdf', 'retrying')
     calls = []
     monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', _killed_on(calls=calls))
     _run(tmp_path, retry_failed=True)
