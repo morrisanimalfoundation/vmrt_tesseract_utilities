@@ -240,6 +240,12 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
   `transcription_input`), keeps going after a failure, and lists every failed file at the end. Failed files are
   skipped on later runs; pass `--retry-failed` to try them again. If poppler or Tesseract isn't usable, step 2
   stops before touching any file.
+- Step 2 renders pages at 200 dpi. A page too large for that is rendered at the highest resolution that keeps it
+  under Pillow's image size limit (179M pixels) and Tesseract's limit of 32,767 pixels on a side, and the log says
+  which resolution it used. This is usually a scan whose page size was set to several feet across, or a long, thin
+  page such as a receipt. A page that would need less than 50 dpi fails with
+  `PageTooLargeError` instead, since its text would be too small to read. A page at the limit takes about 4 GB of
+  memory during OCR, so allow for that when choosing how many `--shard` runs to start at once.
 - `--shard i/N` (step 2) runs OCR in parallel. Each run uses about one CPU core, so start N runs at once with
   `--shard 0/N`, `--shard 1/N`, ... `--shard N-1/N`: each takes only the PDFs whose database ID leaves remainder
   `i` when divided by N, so no two runs pick the same file. Don't use `--offset` for this: it counts from the
