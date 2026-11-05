@@ -1,6 +1,7 @@
 import os
 import re
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -82,12 +83,37 @@ def test_large_page_is_rendered_within_pixel_limit(pdf_path, monkeypatch):
             assert line in output[0]['content']
 
 
+def test_long_page_is_rendered_within_side_limit(pdf_path, monkeypatch):
+    """
+    Test that a page with a side longer than MAX_PAGE_SIDE at 200 dpi is rendered smaller, and its text is still
+    read.
+
+    The limit is lowered so the synthetic letter-size pages count as too long, which keeps the test fast.
+    """
+    monkeypatch.setattr(tesseract_operations, 'MAX_PAGE_SIDE', 1500)
+    sizes = [image.size for _, image in TesseractOperationBase._iter_pages(pdf_path)]
+    assert all(max(width, height) <= 1500 for width, height in sizes)
+    output = TesseractOperationDoc().process_row(pdf_path)
+    for lines in PAGE_LINES:
+        for line in lines:
+            assert line in output[0]['content']
+
+
+def test_max_page_pixels_matches_pillow():
+    """
+    Test that MAX_PAGE_PIXELS, set as a number because CI replaces Pillow, is still the size Pillow refuses above, so
+    a Pillow upgrade that changes its limit fails here rather than on real records.
+    """
+    from PIL import Image
+    assert tesseract_operations.MAX_PAGE_PIXELS == 2 * Image.MAX_IMAGE_PIXELS
+
+
 def _with_crop_box(source: str, path, crop_box: str) -> str:
     """
     Copies a one-page PDF written by Pillow, adding a CropBox to its page. Poppler rebuilds the cross-reference
     table the insertion invalidates.
     """
-    data = open(source, 'rb').read()
+    data = Path(source).read_bytes()
     media_box = re.search(rb'/MediaBox \[[^\]]*\]', data).group(0)
     path.write_bytes(data.replace(media_box, media_box + b' /CropBox [ ' + crop_box.encode() + b' ]', 1))
     return str(path)

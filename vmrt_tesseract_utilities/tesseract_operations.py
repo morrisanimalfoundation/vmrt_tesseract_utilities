@@ -33,6 +33,10 @@ RENDER_DPI = 200
 # feet failed. Pages over half of it render as before, with a DecompressionBombWarning. OCR of a page this size
 # peaks at about 4 GB.
 MAX_PAGE_PIXELS = 178_956_970
+# The longest side a rendered page may have: Tesseract won't read an image with a side over this, and fails with
+# "No image set?" instead. A long, thin page (a receipt, a continuous form) can be under MAX_PAGE_PIXELS and still
+# have a side this long, so it's rendered at a lower resolution too.
+MAX_PAGE_SIDE = 32_767
 # Below this, text is too small to read, so a page that would need it fails as too large rather than as having no
 # text.
 MIN_RENDER_DPI = 50
@@ -120,6 +124,10 @@ def page_sizes(input_path: str, page_count: int) -> dict[int, tuple[float, float
     """
     result = subprocess.run(['pdfinfo', '-box', '-f', '1', '-l', str(page_count), input_path],
                             capture_output=True, text=True, errors='replace')
+    if result.returncode != 0:
+        # Logged once here, since every page then falls back to RENDER_DPI with a warning of its own.
+        stdout_logger.warning(f'Item {input_path}: pdfinfo -box exited with code {result.returncode}, so some page '
+                              f'sizes may be unknown: {result.stderr.strip()[:500]}')
     return parse_media_boxes(result.stdout)
 
 
@@ -201,10 +209,10 @@ class TesseractOperationBase(ABC):
     def _render_dpi(input_path: str, page: int, size: tuple[float, float] | None) -> int:
         """
         Chooses the resolution to render a page at: RENDER_DPI, or lower if the page would then have more than
-        MAX_PAGE_PIXELS pixels.
+        MAX_PAGE_PIXELS pixels or a side longer than MAX_PAGE_SIDE.
 
-        A page that size is almost always a scan whose page size was set wrong, so it's several feet across, and
-        its text is still large enough to read at the lower resolution.
+        A page that size is almost always a scan whose page size was set wrong, so it's several feet across, or a
+        long, thin page such as a receipt, and its text is still large enough to read at the lower resolution.
 
         Parameters
         ----------
@@ -225,15 +233,20 @@ class TesseractOperationBase(ABC):
         PageTooLargeError
           If the page would have to be rendered below MIN_RENDER_DPI.
         """
-        if not size or not all(size):
+        if not size:
             stdout_logger.warning(f'Item {input_path}: the size of page {page} is unknown, so it is rendered at '
                                   f'{RENDER_DPI} dpi without checking it fits.')
             return RENDER_DPI
         width, height = size
+        if not width or not height:
+            stdout_logger.warning(f'Item {input_path}: page {page} has a MediaBox of {width:.2f} x {height:.2f} '
+                                  f'inches, so it is rendered at {RENDER_DPI} dpi without checking it fits.')
+            return RENDER_DPI
         dpi = TesseractOperationBase._fit_dpi(width, height)
         if dpi < MIN_RENDER_DPI:
-            raise PageTooLargeError(f'Page {page} is {width:.0f} x {height:.0f} inches, too large to read: it would '
-                                    f'have to be rendered at {dpi} dpi, below the minimum of {MIN_RENDER_DPI}.')
+            raise PageTooLargeError(f'Page {page} of {input_path} is {width:.0f} x {height:.0f} inches, too large to '
+                                    f'read: it would have to be rendered at {dpi} dpi, below the minimum of '
+                                    f'{MIN_RENDER_DPI}.')
         if dpi < RENDER_DPI:
             stdout_logger.info(f'Item {input_path}: page {page} is {width:.0f} x {height:.0f} inches, so it is '
                                f'rendered at {dpi} dpi instead of {RENDER_DPI}.')
@@ -243,21 +256,34 @@ class TesseractOperationBase(ABC):
     def _fit_dpi(width: float, height: float) -> int:
         """
         The highest resolution, up to RENDER_DPI, at which a page of the given size in inches has at most
-        MAX_PAGE_PIXELS pixels.
+        MAX_PAGE_PIXELS pixels and no side longer than MAX_PAGE_SIDE.
 
         >>> TesseractOperationBase._fit_dpi(8.5, 11)
         200
         >>> TesseractOperationBase._fit_dpi(59, 80)
         194
 
+        A long, thin page is limited by its length rather than its area:
+
+        >>> TesseractOperationBase._fit_dpi(8.5, 200)
+        163
+
         Poppler can round each side up by a pixel, so that's allowed for:
 
         >>> dpi = TesseractOperationBase._fit_dpi(59, 80)
         >>> (59 * dpi + 1) * (80 * dpi + 1) <= MAX_PAGE_PIXELS < (59 * (dpi + 1) + 1) * (80 * (dpi + 1) + 1)
         True
+        >>> 200 * 163 + 1 <= MAX_PAGE_SIDE < 200 * 164 + 1
+        True
         """
-        dpi = min(RENDER_DPI, math.floor(math.sqrt(MAX_PAGE_PIXELS / (width * height))))
-        while dpi > 0 and (width * dpi + 1) * (height * dpi + 1) > MAX_PAGE_PIXELS:
+        dpi = min(RENDER_DPI,
+                  math.floor(math.sqrt(MAX_PAGE_PIXELS / (width * height))),
+                  math.floor((MAX_PAGE_SIDE - 1) / max(width, height)))
+        while dpi > 0:
+            fits_pixels = (width * dpi + 1) * (height * dpi + 1) <= MAX_PAGE_PIXELS
+            fits_side = max(width, height) * dpi + 1 <= MAX_PAGE_SIDE
+            if fits_pixels and fits_side:
+                break
             dpi -= 1
         return dpi
 

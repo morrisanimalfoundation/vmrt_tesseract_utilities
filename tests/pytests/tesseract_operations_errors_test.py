@@ -1,3 +1,5 @@
+import logging
+import subprocess
 from unittest import mock
 
 import pytest
@@ -77,6 +79,8 @@ def test_unreadable_pdf_raises(monkeypatch):
     ((8.5, 11.0), 200),
     # The page that failed on real records: 188,817,300 pixels at 200 dpi.
     ((59.0, 80.0), 194),
+    # A long, thin page: under the pixel limit, but 40,000 pixels long at 200 dpi, more than Tesseract reads.
+    ((8.5, 200.0), 163),
     # pdfinfo didn't report the size, or reported a zero-width box.
     (None, 200),
     ((0.0, 1.4), 200),
@@ -115,9 +119,25 @@ def test_page_too_large_to_read_raises(monkeypatch):
     monkeypatch.setattr(tesseract_operations, 'page_sizes', lambda path, page_count: {1: (500.0, 500.0)})
     convert = mock.MagicMock()
     monkeypatch.setattr(tesseract_operations.pdf2image, 'convert_from_path', convert)
-    with pytest.raises(PageTooLargeError, match='500 x 500 inches'):
+    with pytest.raises(PageTooLargeError, match='huge.pdf is 500 x 500 inches'):
         TesseractOperationDoc().process_row('huge.pdf')
     convert.assert_not_called()
+
+
+def test_page_sizes_logs_when_pdfinfo_fails(monkeypatch, caplog):
+    """
+    Test that a pdfinfo -box failure is logged once, with what pdfinfo printed, instead of only showing up as
+    every page's size being unknown.
+
+    Asserts:
+        No sizes are returned, and the warning names the exit code and pdfinfo's error.
+    """
+    failed = subprocess.CompletedProcess(args=[], returncode=1, stdout='', stderr='Syntax Error: Couldn\'t read xref table\n')
+    monkeypatch.setattr(tesseract_operations.subprocess, 'run', lambda *args, **kwargs: failed)
+    with caplog.at_level(logging.WARNING, logger='import_utility'):
+        assert tesseract_operations.page_sizes('damaged.pdf', 3) == {}
+    assert "exited with code 1" in caplog.text
+    assert "Couldn't read xref table" in caplog.text
 
 
 def _fake_setup(monkeypatch, tools=('pdfinfo', 'pdftoppm'), tessdata_exists=True, models=('eng', 'osd'),
