@@ -9,6 +9,9 @@ services:
     restart: always
     environment:
       MYSQL_ROOT_PASSWORD: $SQL_PASSWORD
+    # Keeps the database between sessions: `docker compose down` removes the container but not this volume.
+    volumes:
+      - mysql-data:/var/lib/mysql
   vmrt-emr-workspace:
     container_name: vmrt-emr-workspace
     # Prebuilt by .github/workflows/docker_image.yaml; `./run.sh --build` builds it locally instead.
@@ -22,6 +25,7 @@ services:
       - emr-source:/data
 
 volumes:
+  mysql-data:
   emr-source:
     driver: local
     driver_opts:
