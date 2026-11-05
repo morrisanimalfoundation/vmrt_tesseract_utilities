@@ -236,10 +236,15 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 - **Batch size** defaults to 1000 files per run in steps 2, 3, and 4. If you have more than 1000 files,
   re-run steps 2 and 4 until they stop finding files (step 2 prints `Found 0 files to transcribe`, step 4
   `Found 0 files to scrub`), or pass `--until-done` to step 4 to scrub every batch in one run. Step 3 skips files already completed for that replacement pass, so rerun the same command to process the next batch; no `--offset` is needed.
-- Step 2 records each PDF it tries as `success` or `failed` (`ocr_status` and `ocr_error` in
-  `transcription_input`), keeps going after a failure, and lists every failed file at the end. Failed files are
+- Step 2 records each PDF it finishes as `success` or `failed` (`ocr_status` and `ocr_error` in
+  `transcription_input`; `NULL` means not tried yet), keeps going after a failure, and lists every failed file at the end. Failed files are
   skipped on later runs; pass `--retry-failed` to try them again. If poppler or Tesseract isn't usable, step 2
   stops before touching any file.
+- Step 2 marks each PDF `started` while reading it. If the run is killed part way through a PDF (it ran out of
+  memory, or the job was stopped), the next run finds it still `started` and tries it once more as `retrying`. If
+  that attempt is cut short too, the PDF is marked `failed` with an `OcrInterrupted` error and skipped from then
+  on, so one PDF that always runs out of memory can't stop every later run. `--retry-failed` tries it again. A
+  PDF left `started` or `retrying` still counts as waiting to be transcribed.
 - Step 2 renders pages at 200 dpi. A page too large for that is rendered at the highest resolution that keeps it
   under Pillow's image size limit (179M pixels) and Tesseract's limit of 32,767 pixels on a side, and the log says
   which resolution it used. This is usually a scan whose page size was set to several feet across, or a long, thin
@@ -253,7 +258,8 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
   others. Rerun each shard until it prints `Found 0 files to transcribe`.
   - **Every run going at the same time must use the same N.** Nothing in the database marks a file as taken, so
     runs with different N overlap (`0/2` and `0/3` both take ID 6) and OCR the same files twice, giving them
-    extra output rows. To change N, stop every run first; files they finished are skipped from then on, as are
+    extra output rows. A run can also find a PDF another run is reading still `started`, take it for one a killed
+    run left behind, and in the end mark it failed with `OcrInterrupted`. To change N, stop every run first; files they finished are skipped from then on, as are
     files that failed (add `--retry-failed` to try those again).
   - The split is even when database IDs go up by 1, which is MySQL's default. On a server set up to step IDs by
     more (`auto_increment_increment`), some shards get no files.
