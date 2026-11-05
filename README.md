@@ -167,8 +167,8 @@ python scripts/create_transcription_process.py /data
 checked for being scanned sideways or upside down, and if it was, it's turned upright and read again. Before
 November 2026, pages upside down or turned 90 degrees counter-clockwise
 came out as garbage, and every later step worked from that text. To redo records processed before then, start
-over from step 1 with a fresh database, as `./run.sh` does each time it starts. In a database you kept, steps 2
-to 5 skip the files they have already processed, so running them again changes nothing.
+over from step 1 with an empty database (see [Stopping, restarting, and starting over](#stopping-restarting-and-starting-over)).
+Otherwise steps 2 to 5 skip the files they have already processed, so running them again changes nothing.
 
 ```bash
 python scripts/transcribe_pdfs.py /workspace/output
@@ -309,20 +309,36 @@ it, or copy it anywhere it is not supposed to be.
 ## Stopping, restarting, and starting over
 
 - **To stop**, type `exit` at the container prompt. This shuts down and removes the containers.
-- **The database is temporary.** It is erased when you exit, and `./run.sh` creates a fresh empty one each
-  time it starts. The files in `output/` are kept, but the record of which files were processed is not — so
-  after restarting you begin again from step 1, and step 2 will redo the OCR. Plan to finish a batch in one
-  session, and leave the container shell open while long steps run.
+- **The database is kept between sessions.** It is stored in a Docker volume (`mysql-data` in
+  `docker-compose.yml`) that survives `exit`, `docker compose down` and restarting your computer. The next
+  `./run.sh` reconnects to it and only creates the database and tables if they are missing, so you can stop
+  part way through a long step and pick up where you left off: rerun the same step, and it skips the files that
+  are already done.
 - **To open a second terminal** in the running container (to look at files while a step runs, say), run
-  this from a new terminal window on your own computer. Do not run `./run.sh` a second time — that would
-  erase the database you are using.
+  this from a new terminal window on your own computer. Do not run `./run.sh` a second time for this: when you
+  exit either shell, its `docker compose down` stops the containers under the other one too.
   ```bash
   docker exec -it vmrt-emr-workspace bash
   ```
-- **To start completely clean**, exit the container, delete the `output` folder, and run `./run.sh` again.
-- **If you keep a database between runs** (for example by changing `run.sh`), note that
-  `database_setup.py install` creates missing tables but doesn't add new columns to existing ones. A database
-  created before step 2 started recording failures needs:
+- **To empty the database** and start over from step 1, run these inside the container. They delete every
+  table, including the record of what has been processed, and create them again empty:
+  ```bash
+  python scripts/database_setup.py drop
+  python scripts/database_setup.py install
+  ```
+  The files in `output/` are not touched. Delete the `output` folder as well if you want those gone too;
+  otherwise files from the old run stay next to the new ones.
+- **To start completely clean**, including deleting the database itself, exit the container and run these
+  from the repository folder on your own computer, then delete the `output` folder and run `./run.sh` again:
+  ```bash
+  docker compose down
+  docker volume rm vmrt_tesseract_utilities_mysql-data
+  ```
+  The volume name starts with the name of your repository folder; if you cloned it under another name, run
+  `docker volume ls` to find it.
+- **After updating the code**, a database you kept may need changes by hand. `./run.sh` runs
+  `database_setup.py install` each time it starts, which creates missing tables but doesn't add new columns to
+  existing ones. A database created before step 2 started recording failures needs:
   ```sql
   ALTER TABLE transcription_input ADD COLUMN ocr_status VARCHAR(20), ADD COLUMN ocr_error TEXT;
   ```
@@ -399,13 +415,17 @@ docker volume rm vmrt_tesseract_utilities_emr-source
 ```
 
 **`Access denied for user 'root'`** — the password in `SQL_CONNECTION_STRING` does not match
-`SQL_PASSWORD` in your `.env`.
+`SQL_PASSWORD` in your `.env`. Or you changed the password after the database was first created: MySQL sets
+the root password only when it creates the database volume, and keeps the old one after that. Put the old
+password back in `.env`, or delete the volume to start clean (see
+[Stopping, restarting, and starting over](#stopping-restarting-and-starting-over)).
 
 **Step 1 finishes instantly and adds nothing** — no folder under `/data` has a subject ID
 (`094-` and six digits) in its name. Check `ls /data`.
 
-**A later step finds 0 files or finishes without doing anything** — the step before it has not been run, the database was
-reset by a restart (go back to step 1), or you used a different document type from the one in step 1.
+**A later step finds 0 files or finishes without doing anything** — the step before it has not been run, it
+has already processed every file (the database is kept between sessions), the database was emptied or deleted
+(go back to step 1), or you used a different document type from the one in step 1.
 
 **`python: command not found` or `No module named ...`** — you are running the command on your own
 computer rather than inside the container. The prompt should end in `/workspace$`.
