@@ -241,6 +241,23 @@ def test_long_text_is_analyzed_in_pieces(analyzer):
         assert identifier.lower() not in text.lower()
 
 
+def test_subject_id_is_not_split_between_pieces(analyzer):
+    """
+    Test that a long text isn't split into pieces in the middle of a subject ID.
+
+    The piece length makes the first piece end at the space inside "094 012345", so the ID is only found, and
+    scrubbed, if the piece ends before it instead.
+    """
+    text = 'Seen today for a recheck, ID 094 012345 on file.\n'
+    max_length = text.index(' 012345') + 1
+
+    scrubbed, results = pii_scrubber.scrub_pii(text, analyzer, threshold=0.5, max_length=max_length)
+
+    start = text.index('094')
+    assert ('ID', start, start + len('094 012345')) in [(r.entity_type, r.start, r.end) for r in results]
+    assert '012345' not in scrubbed
+
+
 def test_offset_is_rejected_with_until_done(monkeypatch):
     """
     Test that --offset can't be combined with --until-done, which would leave that many files unscrubbed.

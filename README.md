@@ -279,8 +279,9 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 - Step 4 analyzes long texts in pieces of up to 100,000 characters, each ending at a line break where possible,
   since the NLP model refuses texts over 1,000,000 characters and needs about 1 GB of memory per 100,000 at
   once. A whole study's records OCR'd as one `document` can be over a million characters; a 1.2 million
-  character text takes about 3 minutes and 1.3 GB. A name or address that runs across a piece's boundary
-  could be missed, which only happens on a line of text longer than the piece.
+  character text takes about 3 minutes and 1.3 GB. A piece never ends inside a subject ID. A name or address
+  that runs across a piece's boundary could be missed, which only happens on a line of text longer than the
+  piece.
 - Step 4 skips files it has already scrubbed. After changing `--threshold` or updating the scrubber, files
   scrubbed before the change keep their old output: to scrub them again, set `pii_scrubber_output_file` and
   `pii_scrubber_confidence_file` back to `NULL` for those rows in `transcription_output` and rerun step 4. In

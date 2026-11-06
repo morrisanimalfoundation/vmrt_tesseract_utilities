@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 
 import yaml
@@ -57,6 +58,10 @@ ADD_STATUS_COLUMNS_SQL = ('ALTER TABLE transcription_output '
 # detections are scaled down to 0.4 by the NLP config (low_confidence_score_multiplier), so matching subject IDs
 # by pattern keeps them above any reasonable threshold.
 SUBJECT_ID_PATTERN = Pattern(name='GRLS subject ID', regex=ocr_subject_id_regex(), score=0.9)
+
+# The same pattern, compiled with the flags PatternRecognizer uses by default, so a long text is never split into
+# pieces in the middle of a subject ID, including one the pattern matches across a space or line break.
+SUBJECT_ID_RE = re.compile(SUBJECT_ID_PATTERN.regex, re.DOTALL | re.MULTILINE | re.IGNORECASE)
 
 
 def create_subject_id_recognizer() -> PatternRecognizer:
@@ -147,9 +152,9 @@ def scrub_pii(text: str, analyzer: AnalyzerEngine, threshold: float,
     Scrubs PII from text using the Presidio library.
 
     Text longer than max_length is analyzed in pieces that end at a line break where possible (see `split_text`),
-    and the results are shifted to their place in the whole text, which is then anonymized at once. An entity is
-    only missed for being split if it runs across a piece's boundary, and a boundary only falls inside a line when
-    max_length characters go by without a line break.
+    and the results are shifted to their place in the whole text, which is then anonymized at once. A piece never
+    ends inside a subject ID. Another entity is only missed for being split if it runs across a piece's boundary,
+    and a boundary only falls inside a line when max_length characters go by without a line break.
 
     Parameters
     ----------
@@ -168,7 +173,7 @@ def scrub_pii(text: str, analyzer: AnalyzerEngine, threshold: float,
         A tuple containing the scrubbed text and the filtered results, with offsets in the whole text.
     """
     results = []
-    for offset, piece in split_text(text, max_length):
+    for offset, piece in split_text(text, max_length, keep_together=SUBJECT_ID_RE):
         for result in analyzer.analyze(text=piece, language='en'):
             result.start += offset
             result.end += offset
