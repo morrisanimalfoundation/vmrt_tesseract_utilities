@@ -8,6 +8,7 @@ from presidio_analyzer import (AnalyzerEngine, Pattern, PatternRecognizer,
                                RecognizerResult)
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_anonymizer import AnonymizerEngine
+from sqlalchemy import inspect
 from sqlalchemy.pool import NullPool
 
 from vmrt_tesseract_utilities.cli import normalize_flag_spelling
@@ -16,13 +17,27 @@ from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                get_database_session)
 from vmrt_tesseract_utilities.grls_id import ocr_subject_id_regex
 from vmrt_tesseract_utilities.logging import stdout_logger
-from vmrt_tesseract_utilities.scrubbing_utils import write_scrubbed_txt
+from vmrt_tesseract_utilities.scrubbing_utils import (split_text,
+                                                      write_scrubbed_txt)
 
 """
 Leverages presidio to attempt automatic PII stripping.
 """
 
 EXCLUDE_TYPES = frozenset(['IN_PAN'])  # Use frozenset for efficient lookups.
+
+# The values of TranscriptionOutput.pii_scrubber_status. NULL means the file hasn't been tried.
+STATUS_SUCCESS = 'success'
+STATUS_FAILED = 'failed'
+
+# The most characters the analyzer is given at once. Longer texts are analyzed in pieces of up to this length.
+# spaCy refuses texts over 1,000,000 characters, and needs about 1 GB of memory per 100,000, so one OCR'd study's
+# worth of records (over a million characters) can't be analyzed whole.
+MAX_ANALYZE_LENGTH = 100_000
+
+# Adds the columns this script records failures in to a database created before it did.
+ADD_STATUS_COLUMNS_SQL = ('ALTER TABLE transcription_output '
+                          'ADD COLUMN pii_scrubber_status VARCHAR(20), ADD COLUMN pii_scrubber_error TEXT;')
 
 # GRLS subject IDs (e.g. "094-012345"), including the forms they take in OCR'd text: a space, en dash or nothing
 # in place of the dash, a letter O read for the leading zero, and an extra zero-padded digit. The model's ID
@@ -113,9 +128,15 @@ def create_nlp_engine(nlp_config_file: str) -> AnalyzerEngine:
         raise
 
 
-def scrub_pii(text: str, analyzer: AnalyzerEngine, threshold: float) -> tuple[str | None, list[RecognizerResult]]:
+def scrub_pii(text: str, analyzer: AnalyzerEngine, threshold: float,
+              max_length: int = MAX_ANALYZE_LENGTH) -> tuple[str | None, list[RecognizerResult]]:
     """
     Scrubs PII from text using the Presidio library.
+
+    Text longer than max_length is analyzed in pieces that end at a line break where possible (see `split_text`),
+    and the results are shifted to their place in the whole text, which is then anonymized at once. An entity is
+    only missed for being split if it runs across a piece's boundary, and a boundary only falls inside a line when
+    max_length characters go by without a line break.
 
     Parameters
     ----------
@@ -125,25 +146,27 @@ def scrub_pii(text: str, analyzer: AnalyzerEngine, threshold: float) -> tuple[st
         The Presidio analyzer engine.
     threshold : float
         The score threshold for the filter.
+    max_length : int
+        The most characters to analyze at once.
 
     Returns
     -------
     tuple
-        A tuple containing the scrubbed text and the filtered results.
+        A tuple containing the scrubbed text and the filtered results, with offsets in the whole text.
     """
-    try:
-        results = analyzer.analyze(text=text, language='en')
-        cleaned_results = [
-            result for result in results
-            if result.score >= threshold and result.entity_type not in EXCLUDE_TYPES
-        ]
-        anonymizer = AnonymizerEngine()
-        anonymized_results = anonymizer.anonymize(text=text, analyzer_results=cleaned_results)
-        return anonymized_results.text, cleaned_results
-
-    except Exception as e:
-        stdout_logger.error(f'Error scrubbing PII: {e}')
-        raise
+    results = []
+    for offset, piece in split_text(text, max_length):
+        for result in analyzer.analyze(text=piece, language='en'):
+            result.start += offset
+            result.end += offset
+            results.append(result)
+    cleaned_results = [
+        result for result in results
+        if result.score >= threshold and result.entity_type not in EXCLUDE_TYPES
+    ]
+    anonymizer = AnonymizerEngine()
+    anonymized_results = anonymizer.anonymize(text=text, analyzer_results=cleaned_results)
+    return anonymized_results.text, cleaned_results
 
 
 def write_confidence_record(filename: str, filtered_results: list, original_text: str) -> None:
@@ -176,59 +199,90 @@ def write_confidence_record(filename: str, filtered_results: list, original_text
         raise
 
 
-def process_files(process_filepath_data: list, analyzer: AnalyzerEngine,
-                  output_dir: str, threshold: float) -> None:
+def scrub_file(args: argparse.Namespace, input_filepath: str, analyzer: AnalyzerEngine) -> tuple[str, str]:
     """
-    Processes a list of files, scrubbing PII and writing outputs.
+    Scrubs one text file, writing the scrubbed text and its confidence report.
 
     Parameters
     ----------
-    process_filepath_data : list
-        A list of file data dictionaries.
+    args : argparse.Namespace
+        The parsed args.
+    input_filepath : str
+        The text file to scrub.
     analyzer : AnalyzerEngine
         The Presidio analyzer engine.
-    output_dir : str
-        The output directory to save files to.
-    threshold : float
-        The confidence threshold for PII detection.
+
+    Returns
+    -------
+    tuple[str, str]
+        The paths of the scrubbed text file and the confidence report.
     """
+    with open(input_filepath, 'r') as f:
+        orig_text = f.read()
+    scrubbed_text, result_output = scrub_pii(orig_text, analyzer, args.threshold)
+    filename_without_extension = os.path.splitext(os.path.basename(input_filepath))[0]
+    scrubbed_dir = f'{args.output_to}/scrubbed_text/{args.document_type}/scrubbed_{args.document_type}'
+    os.makedirs(scrubbed_dir, exist_ok=True)
+    output_file = f'{scrubbed_dir}/{filename_without_extension}.txt'
+    write_scrubbed_txt(output_file, scrubbed_text)
+    stdout_logger.info(f"Scrubbed file written to {output_file}")
+    confidence_dir = f'{args.output_to}/scrubbed_text/{args.document_type}/scrubbed_confidence'
+    os.makedirs(confidence_dir, exist_ok=True)
+    confidence_file = f'{confidence_dir}/confidence-{filename_without_extension}.json'
+    write_confidence_record(confidence_file, result_output, orig_text)
+    return output_file, confidence_file
+
+
+def process_files(args: argparse.Namespace, process_filepath_data: list,
+                  analyzer: AnalyzerEngine) -> list[tuple[str, str]]:
+    """
+    Scrubs a chunk of files, saving each one's result as it goes.
+
+    A file that fails is saved as failed with its error, and the rest of the chunk carries on.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        The parsed args.
+    process_filepath_data : list
+        The TranscriptionOutput rows to scrub.
+    analyzer : AnalyzerEngine
+        The Presidio analyzer engine.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        (input file, error) for each file that failed.
+    """
+    failures = []
     # This runs once per chunk, so don't keep a pool of connections open for each one.
     sessionmaker = get_database_session(echo=args.debug_sql, poolclass=NullPool)
     with sessionmaker() as session:
         for output_log in process_filepath_data:
             session.add(output_log)  # Ensure the instance is bound to the session
             # Use the replacement file if it exists, otherwise use the OCR output.
-            if hasattr(output_log, 'list_replacement_output_file') and output_log.list_replacement_output_file:
-                input_filepath = output_log.list_replacement_output_file
-            else:
-                input_filepath = output_log.ocr_output_file
-            # Read the original text from the input file.
-            with open(str(input_filepath), 'r') as f:
-                orig_text = f.read()
+            input_filepath = str(output_log.list_replacement_output_file or output_log.ocr_output_file)
             stdout_logger.info(f"Scrubbing {input_filepath}")
-            # Scrub the PII from the text.
-            scrubbed_text, result_output = scrub_pii(orig_text, analyzer, threshold)
-            # Write the scrubbed text to a file.
-            input_filename = os.path.basename(str(input_filepath))
-            filename_without_extension = os.path.splitext(input_filename)[0]
-            scrubbed_dir = f'{output_dir}/scrubbed_text/{args.document_type}/scrubbed_{args.document_type}'
-            os.makedirs(scrubbed_dir, exist_ok=True)  # Create directory if needed
-            output_file = f'{scrubbed_dir}/{filename_without_extension}.txt'
-            write_scrubbed_txt(output_file, scrubbed_text)
-            stdout_logger.info(f"Scrubbed file written to {output_file}")
-            # Write the scrubbed confidence data to a file.
+            try:
+                output_file, confidence_file = scrub_file(args, input_filepath, analyzer)
+            except Exception as e:
+                error = f'{type(e).__name__}: {e}'
+                stdout_logger.error(f'Failed to scrub {input_filepath}: {error}')
+                failures.append((input_filepath, error))
+                output_log.pii_scrubber_status = STATUS_FAILED
+                output_log.pii_scrubber_error = error
+                session.commit()
+                continue
             output_log.pii_scrubber_output_file = output_file
-            confidence_dir = f'{output_dir}/scrubbed_text/{args.document_type}/scrubbed_confidence'
-            os.makedirs(confidence_dir, exist_ok=True)
-            confidence_file = f'{confidence_dir}/confidence-{filename_without_extension}.json'
             output_log.pii_scrubber_confidence_file = confidence_file
-            write_confidence_record(confidence_file, result_output, orig_text)
-            # Log the changes to the database.
-            session.add(output_log)
-        session.commit()
+            output_log.pii_scrubber_status = STATUS_SUCCESS
+            output_log.pii_scrubber_error = None
+            # Commit per file, so a crash part way through a chunk only loses the file in progress.
+            session.commit()
+    return failures
 
 
-def get_files_to_process(args: argparse.Namespace) -> list:
+def get_files_to_process(args: argparse.Namespace, after_id: int | None = None) -> list:
     """
     Gets a list of input files to process.
 
@@ -236,6 +290,8 @@ def get_files_to_process(args: argparse.Namespace) -> list:
     ----------
     args: argparse.Namespace
         The parsed args.
+    after_id: int | None
+        Only return rows with a higher ID than this.
 
     Returns
     -------
@@ -250,20 +306,24 @@ def get_files_to_process(args: argparse.Namespace) -> list:
                  .outerjoin(TranscriptionInput.assets)
                  .where(TranscriptionInput.document_type == args.document_type)
                  .where(TranscriptionOutput.ocr_output_file != None)  # noqa: E711
-                 .where(TranscriptionOutput.pii_scrubber_output_file == None)  # noqa: E711
-                 .order_by(TranscriptionOutput.id)
+                 .where(TranscriptionOutput.pii_scrubber_output_file == None))  # noqa: E711
+        if not args.retry_failed:
+            query = query.where(TranscriptionOutput.pii_scrubber_status.is_distinct_from(STATUS_FAILED))
+        if after_id is not None:
+            query = query.where(TranscriptionOutput.id > after_id)
+        query = (query.order_by(TranscriptionOutput.id)
                  .limit(args.chunk_size)
                  .offset(args.offset))
         results = query.all()
     return results
 
 
-def scrub_chunks(args: argparse.Namespace, analyzer: AnalyzerEngine) -> None:
+def scrub_chunks(args: argparse.Namespace, analyzer: AnalyzerEngine) -> list[tuple[str, str]]:
     """
     Scrubs one chunk of files, or with --until-done, keeps scrubbing chunks until no files are left.
 
-    Each chunk is committed before the next is queried, so the loop ends: a file that fails stops the run with
-    an exception rather than being picked again.
+    Each chunk starts after the last one's highest ID, so a file is tried at most once per run, even when it fails
+    and --retry-failed would otherwise pick it again.
 
     Parameters
     ----------
@@ -271,15 +331,58 @@ def scrub_chunks(args: argparse.Namespace, analyzer: AnalyzerEngine) -> None:
         The parsed args.
     analyzer : AnalyzerEngine
         The Presidio analyzer engine.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        (input file, error) for each file that failed.
     """
+    failures = []
+    count = 0
+    last_id = None
     while True:
-        db_output_logs = get_files_to_process(args)
+        db_output_logs = get_files_to_process(args, after_id=last_id)
         stdout_logger.info(f'Found {len(db_output_logs)} files to scrub.')
         if not db_output_logs:
-            return
-        process_files(db_output_logs, analyzer, args.output_to, args.threshold)
+            break
+        # Read before scrubbing, since committing each file expires its row once the chunk's session closes.
+        last_id = db_output_logs[-1].id
+        failures += process_files(args, db_output_logs, analyzer)
+        count += len(db_output_logs)
         if not args.until_done:
-            return
+            break
+    stdout_logger.info(f'All done! Scrubbed {count - len(failures)} of {count} files.')
+    if failures:
+        stdout_logger.warning(f'{len(failures)} file(s) failed and were skipped (see pii_scrubber_error in '
+                              f'transcription_output); pass --retry-failed to try them again:')
+        for input_file, error in failures:
+            stdout_logger.warning(f'  {input_file}: {error}')
+    return failures
+
+
+def check_status_columns(args: argparse.Namespace) -> None:
+    """
+    Checks that the database has the columns failures are recorded in, before any file is scrubbed.
+
+    `database_setup.py install` doesn't add columns to existing tables, so a database created before this script
+    recorded failures doesn't have them.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        The parsed args.
+
+    Raises
+    ------
+    RuntimeError
+        If the columns are missing.
+    """
+    sessionmaker = get_database_session(echo=args.debug_sql, poolclass=NullPool)
+    columns = {column['name'] for column in inspect(sessionmaker.kw['bind']).get_columns('transcription_output')}
+    if not {'pii_scrubber_status', 'pii_scrubber_error'} <= columns:
+        raise RuntimeError(f'The transcription_output table has no pii_scrubber_status and pii_scrubber_error '
+                           f'columns, which this script records failures in. The database was created before they '
+                           f'were added: add them with\n  {ADD_STATUS_COLUMNS_SQL}')
 
 
 def parse_args() -> argparse.Namespace:
@@ -308,6 +411,8 @@ def parse_args() -> argparse.Namespace:
                         help='The target confidence threshold for scores.')
     parser.add_argument('--until-done', action='store_true',
                         help='Keep scrubbing chunks until no files are left, instead of stopping after one.')
+    parser.add_argument('--retry-failed', action='store_true',
+                        help='Also scrub files that failed on an earlier run.')
     args = parser.parse_args(normalize_flag_spelling(sys.argv[1:]))
     # The offset would be applied to every chunk, so the run would stop with that many files still unscrubbed.
     if args.until_done and args.offset:
@@ -317,5 +422,10 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == '__main__':
     args = parse_args()
+    try:
+        check_status_columns(args)
+    except RuntimeError as e:
+        stdout_logger.error(f'Stopping before scrubbing anything: {e}')
+        sys.exit(1)
     nlp_engine = create_nlp_engine(args.config)
     scrub_chunks(args, nlp_engine)

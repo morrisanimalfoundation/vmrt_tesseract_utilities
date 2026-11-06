@@ -5,6 +5,55 @@ Utility functions for scrubbing actions.
 """
 
 
+def split_text(text: str, max_length: int) -> list[tuple[int, str]]:
+    r"""
+    Splits text into pieces of at most max_length characters, each with its offset in the text.
+
+    Each piece ends at the last line break that fits, or the last space or tab if no line break does, so a word
+    (and usually a name or address) isn't cut in two. Only a run of max_length characters with neither is cut
+    mid-word. Joining the pieces gives back the text.
+
+    Parameters
+    ----------
+    text : str
+        The text to split.
+    max_length : int
+        The most characters a piece may have.
+
+    Returns
+    -------
+    list[tuple[int, str]]
+        (offset, piece) pairs, in order. Empty text gives no pieces.
+
+    Examples
+    --------
+    >>> split_text('one\ntwo three\nfour', 10)
+    [(0, 'one\n'), (4, 'two three\n'), (14, 'four')]
+    >>> split_text('two three four', 8)
+    [(0, 'two '), (4, 'three '), (10, 'four')]
+    >>> split_text('abcdefghij', 4)
+    [(0, 'abcd'), (4, 'efgh'), (8, 'ij')]
+    >>> split_text('short', 10)
+    [(0, 'short')]
+    """
+    if max_length < 1:
+        raise ValueError('max_length must be at least 1.')
+    pieces = []
+    start = 0
+    while start < len(text):
+        end = start + max_length
+        if end < len(text):
+            window = text[start:end]
+            cut = window.rfind('\n')
+            if cut < 0:
+                cut = max(window.rfind(' '), window.rfind('\t'))
+            if cut >= 0:
+                end = start + cut + 1
+        pieces.append((start, text[start:end]))
+        start = end
+    return pieces
+
+
 def write_scrubbed_txt(output_filename: str, anonymized_text: str) -> None:
     """
     Writes the anonymized text to an output file.
