@@ -138,22 +138,11 @@ def id_variants(text: str) -> List[str]:
 
 def ocr_subject_id_regex() -> str:
     """
-    Builds a regex that finds GRLS subject IDs in OCR'd text, for the PII scrubber.
+    Builds the PII scrubber's regex for GRLS subject IDs.
 
-    As well as the variants id_variants() lists, it allows a space or en dash in place of the dash and a letter O
-    read for the leading zero of the site prefix. \\d is used deliberately here: when scrubbing, matching too much is
-    safer than missing an ID.
-
-    Returns
-    -------
-    str
-        The regex.
-
-    Examples
-    --------
-    >>> ocr_subject_id_regex()
-    '(?<!\\\\d)[0O]94[-– ]?0?\\\\d{6}(?!\\\\d)'
+    Allows existing OCR formatting variants and one line break between
+    the site prefix and the complete numeric suffix.
     """
     first, rest = SITE_PREFIX[0], SITE_PREFIX[1:]
     leading = f'[{first}O]' if first == '0' else first
-    return rf'(?<!\d){leading}{rest}[-– ]?{SUFFIX_PADDING}?\d{{{SUFFIX_LENGTH}}}(?!\d)'
+    return rf'(?<!\d){leading}{rest}[-– ]?(?:[ \t]*\r?\n[ \t]*)?{SUFFIX_PADDING}?\d{{{SUFFIX_LENGTH}}}(?!\d)'
