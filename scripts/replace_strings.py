@@ -1,3 +1,6 @@
+"""
+Replaces strings in scrubbed text files from a CSV or TSV.
+"""
 import argparse
 import csv
 import datetime
@@ -9,7 +12,7 @@ import sys
 import tempfile
 import traceback
 from concurrent.futures import ProcessPoolExecutor
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 from sqlalchemy import and_, or_
 from sqlalchemy.pool import NullPool
@@ -33,9 +36,9 @@ EXIT_INCOMPLETE = 3
 # How many failed or missing files to list in the log; the rest are counted.
 MAX_LISTED = 20
 
-"""
-Replaces strings in scrubbed text files from a CSV or TSV.
-"""
+# The StringReplacer built in this process, with the inputs it was built from. Building one compiles a pattern for
+# every target, so get_replacer builds it once and reuses it instead of rebuilding it for every file.
+_replacer_cache: Optional[tuple] = None
 
 
 def read_target_strings(data_file: str, key_column: str) -> List[str]:
@@ -85,6 +88,38 @@ def read_target_strings(data_file: str, key_column: str) -> List[str]:
         raise
 
 
+def get_replacer(strings_to_replace: Iterable[str], replacement_string: str) -> StringReplacer:
+    """
+    Gets the StringReplacer for these targets and replacement, building it only the first time in this process.
+
+    Building a replacer compiles a pattern for every target, which can take longer than replacing the targets in a
+    small file, so it's reused for every file after the first instead of being rebuilt for each one. Each worker
+    process builds its own, unless the parent built it first and the workers inherited it when they were forked.
+
+    The inputs are compared by value, so a call with different targets or a different replacement gets a new
+    replacer.
+
+    Parameters
+    ----------
+    strings_to_replace : iterable of str
+        The strings to search for.
+    replacement_string : str
+        The string to replace them with.
+
+    Returns
+    -------
+    StringReplacer
+        The replacer for these inputs.
+    """
+    global _replacer_cache
+    # Read once into a tuple, so the key and the replacer agree even if the targets are a one-shot iterable.
+    targets = tuple(strings_to_replace)
+    key = (targets, replacement_string)
+    if _replacer_cache is None or _replacer_cache[0] != key:
+        _replacer_cache = (key, StringReplacer(list(targets), replacement_string))
+    return _replacer_cache[1]
+
+
 def process_file(output_log, strings_to_replace: List[str], parsed_args: argparse.Namespace) -> Optional[object]:
     """
     Processes a single file, replacing text and writing outputs.
@@ -122,7 +157,7 @@ def process_file(output_log, strings_to_replace: List[str], parsed_args: argpars
     with open(str(input_file), "r") as f:
         orig_text = f.read()
 
-    replacer = StringReplacer(strings_to_replace, parsed_args.replacement_string)
+    replacer = get_replacer(strings_to_replace, parsed_args.replacement_string)
     scrubbed_text = replacer.replace(orig_text)
 
     _write_atomically(output_file, scrubbed_text)
@@ -401,9 +436,9 @@ def make_pass_hash(
     tuple
         A tuple containing the SHA-256 pass hash and the effective ordered targets.
     """
-    effective_targets = StringReplacer(
-        target_strings, replacement_string
-    ).target_strings
+    # Built through get_replacer so the files can reuse it: forked workers inherit it, and a run without
+    # multiprocessing uses it as it is. The list is a copy, so changing the returned one can't change that replacer.
+    effective_targets = list(get_replacer(target_strings, replacement_string).target_strings)
 
     payload = json.dumps(
         {
