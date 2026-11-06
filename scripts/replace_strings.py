@@ -1,3 +1,6 @@
+"""
+Replaces strings in scrubbed text files from a CSV or TSV.
+"""
 import argparse
 import csv
 import datetime
@@ -9,7 +12,7 @@ import sys
 import tempfile
 import traceback
 from concurrent.futures import ProcessPoolExecutor
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 from sqlalchemy import and_, or_
 from sqlalchemy.pool import NullPool
@@ -36,10 +39,6 @@ MAX_LISTED = 20
 # The StringReplacer built in this process, with the inputs it was built from. Building one compiles a pattern for
 # every target, so get_replacer builds it once and reuses it instead of rebuilding it for every file.
 _replacer_cache: Optional[tuple] = None
-
-"""
-Replaces strings in scrubbed text files from a CSV or TSV.
-"""
 
 
 def read_target_strings(data_file: str, key_column: str) -> List[str]:
@@ -89,7 +88,7 @@ def read_target_strings(data_file: str, key_column: str) -> List[str]:
         raise
 
 
-def get_replacer(strings_to_replace: List[str], replacement_string: str) -> StringReplacer:
+def get_replacer(strings_to_replace: Iterable[str], replacement_string: str) -> StringReplacer:
     """
     Gets the StringReplacer for these targets and replacement, building it only the first time in this process.
 
@@ -102,7 +101,7 @@ def get_replacer(strings_to_replace: List[str], replacement_string: str) -> Stri
 
     Parameters
     ----------
-    strings_to_replace : list of str
+    strings_to_replace : iterable of str
         The strings to search for.
     replacement_string : str
         The string to replace them with.

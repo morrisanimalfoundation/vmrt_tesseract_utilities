@@ -1,4 +1,7 @@
+import multiprocessing
+import os
 from argparse import Namespace
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -205,3 +208,75 @@ def test_a_run_builds_one_replacer_for_all_its_files(db, tmp_path, builds):
     assert len(builds) == 1
     replaced = sorted((tmp_path / 'out' / 'list_replacement_output_file' / 'document').glob('*.txt'))
     assert [path.read_text() for path in replaced] == [f'{name} saw <NAME> today.' for name in 'abcde']
+
+
+def _build_report(targets, replacement_string):
+    """
+    Runs in a worker: the worker's process id, and whether this call built a replacer instead of reusing one.
+    """
+    before = replace_strings._replacer_cache
+    replace_strings.get_replacer(targets, replacement_string)
+    return os.getpid(), replace_strings._replacer_cache is not before
+
+
+def _builds_by_worker(start_method, max_workers=2, tasks=8):
+    """
+    Calls get_replacer from several workers started with the given method, once per task, with the same targets
+    each time, as the files of a run are sent to the workers.
+
+    Returns
+    -------
+    dict
+        For each worker that took a task, how many replacers it built.
+    """
+    context = multiprocessing.get_context(start_method)
+    with ProcessPoolExecutor(max_workers=max_workers, mp_context=context) as executor:
+        results = list(executor.map(_build_report, [['Max', 'Maxwell']] * tasks, ['<NAME>'] * tasks))
+    builds = {}
+    for pid, built in results:
+        builds[pid] = builds.get(pid, 0) + built
+    return builds
+
+
+@pytest.mark.skipif('fork' not in multiprocessing.get_all_start_methods(), reason='needs the fork start method')
+def test_forked_workers_build_nothing_when_the_parent_built_the_replacer(monkeypatch):
+    """
+    Test that workers forked after make_pass_hash, the way a run starts them, inherit its replacer and so build
+    none of their own.
+    """
+    monkeypatch.setattr(replace_strings, '_replacer_cache', None)
+    replace_strings.make_pass_hash(['Max', 'Maxwell'], '<NAME>')
+
+    builds = _builds_by_worker('fork')
+
+    assert builds
+    assert set(builds.values()) == {0}
+
+
+@pytest.mark.parametrize('start_method', [method for method in ('fork', 'spawn')
+                                          if method in multiprocessing.get_all_start_methods()])
+def test_each_worker_builds_the_replacer_once_when_the_parent_has_not(monkeypatch, start_method):
+    """
+    Test that when no replacer was built beforehand, each worker builds exactly one and reuses it for the rest of its
+    files, whichever way the workers are started.
+    """
+    monkeypatch.setattr(replace_strings, '_replacer_cache', None)
+
+    builds = _builds_by_worker(start_method)
+
+    assert builds
+    assert set(builds.values()) == {1}
+
+
+def test_spawned_workers_build_their_own_replacer_even_when_the_parent_built_one(monkeypatch):
+    """
+    Test that workers started fresh, as on macOS, don't get the parent's replacer, so each builds one, once. The
+    saving there comes from building once per worker instead of once per file.
+    """
+    monkeypatch.setattr(replace_strings, '_replacer_cache', None)
+    replace_strings.make_pass_hash(['Max', 'Maxwell'], '<NAME>')
+
+    builds = _builds_by_worker('spawn')
+
+    assert builds
+    assert set(builds.values()) == {1}
