@@ -73,6 +73,9 @@ class TranscriptionOutput(Base):
     list_replacement_output_file: Mapped[Optional[str]] = mapped_column(String(PATH_LENGTH))
     pii_scrubber_output_file: Mapped[Optional[str]] = mapped_column(String(PATH_LENGTH))
     pii_scrubber_confidence_file: Mapped[Optional[str]] = mapped_column(String(PATH_LENGTH))
+    # 'success' or 'failed' once pii_scrubber has tried this file, None before that.
+    pii_scrubber_status: Mapped[Optional[str]] = mapped_column(String(20))
+    pii_scrubber_error: Mapped[Optional[str]] = mapped_column(Text)
 
     def __repr__(self) -> str:
         return f'Transcription Output (id={self.id})!r'
