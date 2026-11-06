@@ -16,7 +16,7 @@ from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                TranscriptionOutput,
                                                get_database_session)
 from vmrt_tesseract_utilities.grls_id import ocr_subject_id_regex
-from vmrt_tesseract_utilities.logging import stdout_logger
+from vmrt_tesseract_utilities.logging import log_run_summary, stdout_logger
 from vmrt_tesseract_utilities.scrubbing_utils import (split_text,
                                                       write_scrubbed_txt)
 
@@ -26,9 +26,22 @@ Leverages presidio to attempt automatic PII stripping.
 
 EXCLUDE_TYPES = frozenset(['IN_PAN'])  # Use frozenset for efficient lookups.
 
-# The values of TranscriptionOutput.pii_scrubber_status. NULL means the file hasn't been tried.
+# The values of TranscriptionOutput.pii_scrubber_status. A file is STARTED while it's being scrubbed, RETRYING while
+# it's being scrubbed again after a run was cut short on it, and SUCCESS or FAILED once it's done. NULL means it
+# hasn't been tried.
+STATUS_STARTED = 'started'
+STATUS_RETRYING = 'retrying'
 STATUS_SUCCESS = 'success'
 STATUS_FAILED = 'failed'
+
+# The error saved for a file whose scrubbing was cut short twice, so a file that always gets its run killed (usually
+# for running out of memory) is skipped like any other failure instead of stopping every later run.
+INTERRUPTED_TWICE_ERROR = ('ScrubInterrupted: scrubbing this file was cut short twice before it could finish: its '
+                           'process was killed, most likely for running out of memory, or the run was stopped. Try '
+                           'it again with --retry-failed.')
+
+# The most characters of an error that are saved, well within a MySQL TEXT column's 65,535 bytes.
+MAX_ERROR_LENGTH = 10_000
 
 # The most characters the analyzer is given at once. Longer texts are analyzed in pieces of up to this length.
 # spaCy refuses texts over 1,000,000 characters, and needs about 1 GB of memory per 100,000, so one OCR'd study's
@@ -199,6 +212,28 @@ def write_confidence_record(filename: str, filtered_results: list, original_text
         raise
 
 
+def output_paths(args: argparse.Namespace, input_filepath: str) -> tuple[str, str]:
+    """
+    Gets where a file's scrubbed text and confidence report are written.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        The parsed args.
+    input_filepath : str
+        The text file to scrub.
+
+    Returns
+    -------
+    tuple[str, str]
+        The paths of the scrubbed text file and the confidence report.
+    """
+    filename_without_extension = os.path.splitext(os.path.basename(input_filepath))[0]
+    scrubbed_dir = f'{args.output_to}/scrubbed_text/{args.document_type}'
+    return (f'{scrubbed_dir}/scrubbed_{args.document_type}/{filename_without_extension}.txt',
+            f'{scrubbed_dir}/scrubbed_confidence/confidence-{filename_without_extension}.json')
+
+
 def scrub_file(args: argparse.Namespace, input_filepath: str, analyzer: AnalyzerEngine) -> tuple[str, str]:
     """
     Scrubs one text file, writing the scrubbed text and its confidence report.
@@ -220,25 +255,77 @@ def scrub_file(args: argparse.Namespace, input_filepath: str, analyzer: Analyzer
     with open(input_filepath, 'r') as f:
         orig_text = f.read()
     scrubbed_text, result_output = scrub_pii(orig_text, analyzer, args.threshold)
-    filename_without_extension = os.path.splitext(os.path.basename(input_filepath))[0]
-    scrubbed_dir = f'{args.output_to}/scrubbed_text/{args.document_type}/scrubbed_{args.document_type}'
-    os.makedirs(scrubbed_dir, exist_ok=True)
-    output_file = f'{scrubbed_dir}/{filename_without_extension}.txt'
+    output_file, confidence_file = output_paths(args, input_filepath)
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
     write_scrubbed_txt(output_file, scrubbed_text)
     stdout_logger.info(f"Scrubbed file written to {output_file}")
-    confidence_dir = f'{args.output_to}/scrubbed_text/{args.document_type}/scrubbed_confidence'
-    os.makedirs(confidence_dir, exist_ok=True)
-    confidence_file = f'{confidence_dir}/confidence-{filename_without_extension}.json'
+    os.makedirs(os.path.dirname(confidence_file), exist_ok=True)
     write_confidence_record(confidence_file, result_output, orig_text)
     return output_file, confidence_file
 
 
-def process_files(args: argparse.Namespace, process_filepath_data: list,
-                  analyzer: AnalyzerEngine) -> list[tuple[str, str]]:
+def remove_outputs(paths: tuple[str, ...]) -> None:
+    """
+    Removes whichever of a failed file's outputs were written, so none is left looking like a finished scrub.
+
+    Parameters
+    ----------
+    paths : tuple[str, ...]
+        The output paths.
+    """
+    for path in paths:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            stdout_logger.error(f'Could not remove the partial output {path}: {e}')
+
+
+def record_failure(session, output_log: TranscriptionOutput, input_filepath: str, error: str,
+                   failures: list) -> None:
+    """
+    Logs that a file failed, adds it to the run's failures, and saves it as failed with its error.
+
+    If the failure can't be saved, that's logged and the run carries on: the file is left as it was saved before
+    scrubbing started, so a later run tries it again.
+
+    Parameters
+    ----------
+    session : Session
+        The open database session.
+    output_log : TranscriptionOutput
+        The file's row.
+    input_filepath : str
+        The file that failed.
+    error : str
+        The error.
+    failures : list
+        The run's (input file, error) failures, added to.
+    """
+    stdout_logger.error(f'Failed to scrub {input_filepath}: {error}')
+    failures.append((input_filepath, error))
+    if len(error) > MAX_ERROR_LENGTH:
+        error = error[:MAX_ERROR_LENGTH] + '... (cut short)'
+    output_log.pii_scrubber_status = STATUS_FAILED
+    output_log.pii_scrubber_error = error
+    try:
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        stdout_logger.error(f'Could not save the failure of {input_filepath}: {type(e).__name__}: {e}')
+
+
+def process_files(args: argparse.Namespace, process_filepath_data: list, analyzer: AnalyzerEngine,
+                  failed_ids: set) -> list[tuple[str, str]]:
     """
     Scrubs a chunk of files, saving each one's result as it goes.
 
-    A file that fails is saved as failed with its error, and the rest of the chunk carries on.
+    A file that fails is saved as failed with its error, and the rest of the chunk carries on. Each file is saved
+    as 'started' before it's scrubbed, so a run that's killed part way through one (by running out of memory, or a
+    stopped build) leaves a record of it. A later run tries a 'started' file once more, as 'retrying', and if that
+    attempt is cut short too, marks it failed instead of trying again (unless --retry-failed is passed, which
+    scrubs it).
 
     Parameters
     ----------
@@ -248,6 +335,8 @@ def process_files(args: argparse.Namespace, process_filepath_data: list,
         The TranscriptionOutput rows to scrub.
     analyzer : AnalyzerEngine
         The Presidio analyzer engine.
+    failed_ids : set
+        The IDs of the rows that failed this run, added to.
 
     Returns
     -------
@@ -260,29 +349,39 @@ def process_files(args: argparse.Namespace, process_filepath_data: list,
     with sessionmaker() as session:
         for output_log in process_filepath_data:
             session.add(output_log)  # Ensure the instance is bound to the session
+            row_id = output_log.id
             # Use the replacement file if it exists, otherwise use the OCR output.
             input_filepath = str(output_log.list_replacement_output_file or output_log.ocr_output_file)
+            if output_log.pii_scrubber_status == STATUS_RETRYING and not args.retry_failed:
+                failed_ids.add(row_id)
+                record_failure(session, output_log, input_filepath, INTERRUPTED_TWICE_ERROR, failures)
+                continue
+            if output_log.pii_scrubber_status in (STATUS_STARTED, STATUS_RETRYING):
+                stdout_logger.warning(f'{input_filepath}: an earlier run was cut short while scrubbing it, so it '
+                                      f'is tried once more.')
+                output_log.pii_scrubber_status = STATUS_RETRYING
+            else:
+                output_log.pii_scrubber_status = STATUS_STARTED
+            # An error from an earlier attempt doesn't describe this one.
+            output_log.pii_scrubber_error = None
+            # Saved before scrubbing starts, so it's still there if this run is killed part way through the file.
+            session.commit()
             stdout_logger.info(f"Scrubbing {input_filepath}")
             try:
-                output_file, confidence_file = scrub_file(args, input_filepath, analyzer)
-            except Exception as e:
-                error = f'{type(e).__name__}: {e}'
-                stdout_logger.error(f'Failed to scrub {input_filepath}: {error}')
-                failures.append((input_filepath, error))
-                output_log.pii_scrubber_status = STATUS_FAILED
-                output_log.pii_scrubber_error = error
+                output_log.pii_scrubber_output_file, output_log.pii_scrubber_confidence_file = \
+                    scrub_file(args, input_filepath, analyzer)
+                output_log.pii_scrubber_status = STATUS_SUCCESS
+                # Commit per file, so a crash part way through a chunk only loses the file in progress.
                 session.commit()
-                continue
-            output_log.pii_scrubber_output_file = output_file
-            output_log.pii_scrubber_confidence_file = confidence_file
-            output_log.pii_scrubber_status = STATUS_SUCCESS
-            output_log.pii_scrubber_error = None
-            # Commit per file, so a crash part way through a chunk only loses the file in progress.
-            session.commit()
+            except Exception as e:
+                session.rollback()
+                remove_outputs(output_paths(args, input_filepath))
+                failed_ids.add(row_id)
+                record_failure(session, output_log, input_filepath, f'{type(e).__name__}: {e}', failures)
     return failures
 
 
-def get_files_to_process(args: argparse.Namespace, after_id: int | None = None) -> list:
+def get_files_to_process(args: argparse.Namespace, failed_ids: frozenset = frozenset()) -> list:
     """
     Gets a list of input files to process.
 
@@ -290,8 +389,8 @@ def get_files_to_process(args: argparse.Namespace, after_id: int | None = None) 
     ----------
     args: argparse.Namespace
         The parsed args.
-    after_id: int | None
-        Only return rows with a higher ID than this.
+    failed_ids: frozenset
+        The IDs of rows that failed this run, which aren't returned again.
 
     Returns
     -------
@@ -309,8 +408,8 @@ def get_files_to_process(args: argparse.Namespace, after_id: int | None = None) 
                  .where(TranscriptionOutput.pii_scrubber_output_file == None))  # noqa: E711
         if not args.retry_failed:
             query = query.where(TranscriptionOutput.pii_scrubber_status.is_distinct_from(STATUS_FAILED))
-        if after_id is not None:
-            query = query.where(TranscriptionOutput.id > after_id)
+        if failed_ids:
+            query = query.where(TranscriptionOutput.id.notin_(failed_ids))
         query = (query.order_by(TranscriptionOutput.id)
                  .limit(args.chunk_size)
                  .offset(args.offset))
@@ -322,8 +421,7 @@ def scrub_chunks(args: argparse.Namespace, analyzer: AnalyzerEngine) -> list[tup
     """
     Scrubs one chunk of files, or with --until-done, keeps scrubbing chunks until no files are left.
 
-    Each chunk starts after the last one's highest ID, so a file is tried at most once per run, even when it fails
-    and --retry-failed would otherwise pick it again.
+    Files that fail aren't picked again in the same run, so with --retry-failed each is tried at most once per run.
 
     Parameters
     ----------
@@ -338,25 +436,20 @@ def scrub_chunks(args: argparse.Namespace, analyzer: AnalyzerEngine) -> list[tup
         (input file, error) for each file that failed.
     """
     failures = []
+    failed_ids = set()
     count = 0
-    last_id = None
     while True:
-        db_output_logs = get_files_to_process(args, after_id=last_id)
+        db_output_logs = get_files_to_process(args, frozenset(failed_ids))
         stdout_logger.info(f'Found {len(db_output_logs)} files to scrub.')
         if not db_output_logs:
             break
-        # Read before scrubbing, since committing each file expires its row once the chunk's session closes.
-        last_id = db_output_logs[-1].id
-        failures += process_files(args, db_output_logs, analyzer)
+        failures += process_files(args, db_output_logs, analyzer, failed_ids)
         count += len(db_output_logs)
         if not args.until_done:
             break
-    stdout_logger.info(f'All done! Scrubbed {count - len(failures)} of {count} files.')
-    if failures:
-        stdout_logger.warning(f'{len(failures)} file(s) failed and were skipped (see pii_scrubber_error in '
-                              f'transcription_output); pass --retry-failed to try them again:')
-        for input_file, error in failures:
-            stdout_logger.warning(f'  {input_file}: {error}')
+    log_run_summary('Scrubbed', count, failures,
+                    note=' and were skipped (see pii_scrubber_error in transcription_output); pass --retry-failed '
+                         'to try them again')
     return failures
 
 
@@ -375,10 +468,14 @@ def check_status_columns(args: argparse.Namespace) -> None:
     Raises
     ------
     RuntimeError
-        If the columns are missing.
+        If the table or the columns are missing.
     """
     sessionmaker = get_database_session(echo=args.debug_sql, poolclass=NullPool)
-    columns = {column['name'] for column in inspect(sessionmaker.kw['bind']).get_columns('transcription_output')}
+    inspector = inspect(sessionmaker.kw['bind'])
+    if not inspector.has_table('transcription_output'):
+        raise RuntimeError('The database has no transcription_output table. Create the tables with '
+                           '`python scripts/database_setup.py install` and run the earlier steps first.')
+    columns = {column['name'] for column in inspector.get_columns('transcription_output')}
     if not {'pii_scrubber_status', 'pii_scrubber_error'} <= columns:
         raise RuntimeError(f'The transcription_output table has no pii_scrubber_status and pii_scrubber_error '
                            f'columns, which this script records failures in. The database was created before they '

@@ -273,6 +273,9 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
   left unscrubbed, with no scrubbed output, and the run keeps going and lists every failed file at the end.
   Failed files are skipped on later runs; pass `--retry-failed` to try them again (each at most once per run).
   The run exits with 0 even when files failed, as step 2 does, so check the list or the database.
+- Like step 2, step 4 marks each file `started` while scrubbing it. If the run is killed part way through a file,
+  the next run tries it once more as `retrying`, and if that attempt is cut short too, marks it `failed` with a
+  `ScrubInterrupted` error and skips it from then on. `--retry-failed` tries it again.
 - Step 4 analyzes long texts in pieces of up to 100,000 characters, each ending at a line break where possible,
   since the NLP model refuses texts over 1,000,000 characters and needs about 1 GB of memory per 100,000 at
   once. A whole study's records OCR'd as one `document` can be over a million characters; a 1.2 million

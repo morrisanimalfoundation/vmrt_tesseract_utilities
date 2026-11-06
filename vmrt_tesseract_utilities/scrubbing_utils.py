@@ -9,8 +9,9 @@ def split_text(text: str, max_length: int) -> list[tuple[int, str]]:
     r"""
     Splits text into pieces of at most max_length characters, each with its offset in the text.
 
-    Each piece ends at the last line break that fits, or the last space or tab if no line break does, so a word
-    (and usually a name or address) isn't cut in two. Only a run of max_length characters with neither is cut
+    Each piece ends at the last line break that fits, so a word (and usually a name or address) isn't cut in two.
+    If that line break is in the first half of the piece, or there isn't one, the piece ends at the last space or
+    tab instead, if that's later. Only a run of max_length characters with neither is cut
     mid-word. Joining the pieces gives back the text.
 
     Parameters
@@ -27,10 +28,12 @@ def split_text(text: str, max_length: int) -> list[tuple[int, str]]:
 
     Examples
     --------
-    >>> split_text('one\ntwo three\nfour', 10)
-    [(0, 'one\n'), (4, 'two three\n'), (14, 'four')]
+    >>> split_text('one two\nthree four', 10)
+    [(0, 'one two\n'), (8, 'three four')]
     >>> split_text('two three four', 8)
     [(0, 'two '), (4, 'three '), (10, 'four')]
+    >>> split_text('a\nb c d e f', 10)
+    [(0, 'a\nb c d e '), (10, 'f')]
     >>> split_text('abcdefghij', 4)
     [(0, 'abcd'), (4, 'efgh'), (8, 'ij')]
     >>> split_text('short', 10)
@@ -45,8 +48,9 @@ def split_text(text: str, max_length: int) -> list[tuple[int, str]]:
         if end < len(text):
             window = text[start:end]
             cut = window.rfind('\n')
-            if cut < 0:
-                cut = max(window.rfind(' '), window.rfind('\t'))
+            # A line break near the start would make a tiny piece, so a later space or tab is used instead.
+            if cut < len(window) // 2:
+                cut = max(cut, window.rfind(' '), window.rfind('\t'))
             if cut >= 0:
                 end = start + cut + 1
         pieces.append((start, text[start:end]))

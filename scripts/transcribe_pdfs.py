@@ -8,7 +8,7 @@ from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                TranscriptionOutput,
                                                get_database_session)
-from vmrt_tesseract_utilities.logging import stdout_logger
+from vmrt_tesseract_utilities.logging import log_run_summary, stdout_logger
 from vmrt_tesseract_utilities.pdf_files import is_pdf_column
 from vmrt_tesseract_utilities.tesseract_operations import (
     OcrSetupError, TesseractOperationBlock, TesseractOperationDoc,
@@ -236,7 +236,7 @@ def run_tesseract(args: argparse.Namespace) -> None:
             session.add_all(db_output_logs)
             # Commit per file, so a crash part way through a chunk only loses the file in progress.
             session.commit()
-    _log_run_summary(count, failures)
+    log_run_summary('Transcribed', count, failures)
 
 
 def _record_failure(session, db_input: TranscriptionInput, error: str, failures: list) -> None:
@@ -261,24 +261,6 @@ def _record_failure(session, db_input: TranscriptionInput, error: str, failures:
     db_input.ocr_status = STATUS_FAILED
     db_input.ocr_error = error
     session.commit()
-
-
-def _log_run_summary(count: int, failures: list) -> None:
-    """
-    Logs how many files were transcribed and lists each failure.
-
-    Parameters
-    ----------
-    count: int
-      The number of files the run attempted.
-    failures: list
-      (input_file, error) tuples for the files that failed.
-    """
-    stdout_logger.info(f'All done! Transcribed {count - len(failures)} of {count} files.')
-    if failures:
-        stdout_logger.warning(f'{len(failures)} file(s) failed:')
-        for input_file, error in failures:
-            stdout_logger.warning(f'  {input_file}: {error}')
 
 
 def parse_args() -> argparse.Namespace:
