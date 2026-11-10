@@ -40,6 +40,8 @@ done
 
 if [[ $COUNTER -eq $TIMEOUT ]]; then
   echo "Error: Timeout waiting for database container."
+  echo "If the errors above say \"Access denied for user 'root'\", see that entry under Troubleshooting in the README:"
+  echo "the database keeps the password it was created with."
   exit 1
 fi
 
