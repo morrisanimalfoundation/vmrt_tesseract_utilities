@@ -10,7 +10,6 @@ internet connection is needed.
 All of the data below is made up.
 """
 
-import argparse
 import os
 import sys
 from collections import Counter
@@ -220,21 +219,43 @@ def test_subject_id_pattern_ignores_longer_numbers(number):
     assert recognizer.analyze(f'Ref {number} on file', entities=['ID']) == []
 
 
-@pytest.mark.parametrize('until_done, chunks_scrubbed', [(False, 1), (True, 2)])
-def test_scrub_chunks(monkeypatch, until_done, chunks_scrubbed):
+def test_long_text_is_analyzed_in_pieces(analyzer):
     """
-    Test that one chunk is scrubbed by default, and every chunk with --until-done.
+    Test that text analyzed in pieces finds the same entities, at the right places, as each piece would alone.
+
+    Each copy of RECORD is one piece, since RECORD ends with a line break, so every copy's results should match
+    RECORD's, shifted by the copy's offset.
     """
-    chunks = [['first', 'second'], ['third'], []]
-    scrubbed_chunks = []
-    monkeypatch.setattr(pii_scrubber, 'get_files_to_process', lambda args: chunks[len(scrubbed_chunks)])
-    monkeypatch.setattr(pii_scrubber, 'process_files',
-                        lambda files, analyzer, output_dir, threshold: scrubbed_chunks.append(files))
-    args = argparse.Namespace(output_to='output', threshold=0.0, until_done=until_done)
+    _, whole = pii_scrubber.scrub_pii(RECORD, analyzer, threshold=0.0)
+    expected = sorted((result.entity_type, result.start, result.end) for result in whole)
 
-    pii_scrubber.scrub_chunks(args, analyzer=None)
+    copies = 3
+    text, results = pii_scrubber.scrub_pii(RECORD * copies, analyzer, threshold=0.0, max_length=len(RECORD))
 
-    assert scrubbed_chunks == chunks[:chunks_scrubbed]
+    for copy in range(copies):
+        offset = copy * len(RECORD)
+        found = sorted((result.entity_type, result.start - offset, result.end - offset) for result in results
+                       if offset <= result.start < offset + len(RECORD))
+        assert found == expected, f'copy {copy}'
+    for identifier in IDENTIFIERS:
+        assert identifier.lower() not in text.lower()
+
+
+def test_subject_id_is_not_split_between_pieces(analyzer):
+    """
+    Test that a long text isn't split into pieces in the middle of a subject ID.
+
+    The piece length makes the first piece end at the space inside "094 012345", so the ID is only found, and
+    scrubbed, if the piece ends before it instead.
+    """
+    text = 'Seen today for a recheck, ID 094 012345 on file.\n'
+    max_length = text.index(' 012345') + 1
+
+    scrubbed, results = pii_scrubber.scrub_pii(text, analyzer, threshold=0.5, max_length=max_length)
+
+    start = text.index('094')
+    assert ('ID', start, start + len('094 012345')) in [(r.entity_type, r.start, r.end) for r in results]
+    assert '012345' not in scrubbed
 
 
 def test_offset_is_rejected_with_until_done(monkeypatch):
