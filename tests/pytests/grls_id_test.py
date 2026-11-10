@@ -77,7 +77,7 @@ def test_ocr_subject_id_regex_expected_pattern():
     Asserts:
         The regex includes the supported OCR formatting and line-break variants.
     """
-    assert ocr_subject_id_regex() == r'(?<!\d)[0O]94[-– ]?(?:[ \t]*\r?\n[ \t]*)?0?\d{6}(?!\d)'
+    assert ocr_subject_id_regex() == r'(?<!\d)[0O]94[-– ]?(?:(?:[ \t]*\r?\n){1,2}[ \t]*)?0?\d{6}(?!\d)'
 
 
 @pytest.mark.parametrize('text, expected', [
@@ -111,7 +111,23 @@ def test_ocr_subject_id_regex_matches(text, expected):
     ('094-\n0037459', ['094-\n0037459']),
     ('094-\n00374599', []),
     ('094-\nOther text\n003745', []),
+    ('094-\n\n003745', ['094-\n\n003745']),
+    ('094-\n \n003745', ['094-\n \n003745']),
+    ('094-\n\n\n003745', []),
+    ('094  003745', []),
 ])
 def test_ocr_subject_id_regex_line_breaks(text, expected):
-    """Match complete split IDs without accepting incomplete IDs."""
+    """
+    Tests the PII scrubber's regex on subject IDs split across line breaks.
+
+    Parameters:
+        text : str
+            The OCR'd text.
+        expected : list of str
+            The IDs that should be found.
+
+    Asserts:
+        A complete ID split by one or two line breaks is found, and an incomplete one, or one with other text or
+        more blank lines between its parts, is not.
+    """
     assert re.findall(ocr_subject_id_regex(), text) == expected
