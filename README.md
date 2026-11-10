@@ -340,6 +340,7 @@ it, or copy it anywhere it is not supposed to be.
   from the repository folder on your own computer, then delete the `output` folder and run `./run.sh` again:
   ```bash
   docker compose down --volumes
+  ```
 - **After updating the code**, a database you kept may need changes by hand. `./run.sh` runs
   `database_setup.py install` each time it starts, which creates missing tables but doesn't add new columns to
   existing ones. (When a change adds a column, add its `ALTER TABLE` to this list.) A database created before
