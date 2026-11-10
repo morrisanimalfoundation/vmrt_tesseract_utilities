@@ -9,6 +9,7 @@ from presidio_analyzer import (AnalyzerEngine, Pattern, PatternRecognizer,
                                RecognizerResult)
 from presidio_analyzer.nlp_engine import NlpEngineProvider
 from presidio_anonymizer import AnonymizerEngine
+from presidio_anonymizer.entities import OperatorConfig
 from sqlalchemy import inspect
 from sqlalchemy.pool import NullPool
 
@@ -62,6 +63,34 @@ SUBJECT_ID_PATTERN = Pattern(name='GRLS subject ID', regex=ocr_subject_id_regex(
 # The same pattern, compiled with the flags PatternRecognizer uses by default, so a long text is never split into
 # pieces in the middle of a subject ID, including one the pattern matches across a space or line break.
 SUBJECT_ID_RE = re.compile(SUBJECT_ID_PATTERN.regex, re.DOTALL | re.MULTILINE | re.IGNORECASE)
+
+
+def replace_id(value: str) -> str:
+    """
+    Replaces an ID with <ID>, keeping any line breaks it was split across, so the lines around it stay apart.
+
+    Parameters
+    ----------
+    value : str
+        The ID's text.
+
+    Returns
+    -------
+    str
+        The replacement.
+
+    Examples
+    --------
+    >>> replace_id('094-\\n\\n012345')
+    '<ID>\\n\\n'
+    >>> replace_id('094-012345')
+    '<ID>'
+    """
+    return '<ID>' + '\n' * value.count('\n')
+
+
+# How each entity type is replaced. Types not listed get the default, <ENTITY_TYPE>.
+ANONYMIZE_OPERATORS = {'ID': OperatorConfig('custom', {'lambda': replace_id})}
 
 
 def create_subject_id_recognizer() -> PatternRecognizer:
@@ -183,7 +212,8 @@ def scrub_pii(text: str, analyzer: AnalyzerEngine, threshold: float,
         if result.score >= threshold and result.entity_type not in EXCLUDE_TYPES
     ]
     anonymizer = AnonymizerEngine()
-    anonymized_results = anonymizer.anonymize(text=text, analyzer_results=cleaned_results)
+    anonymized_results = anonymizer.anonymize(text=text, analyzer_results=cleaned_results,
+                                              operators=ANONYMIZE_OPERATORS)
     return anonymized_results.text, cleaned_results
 
 
