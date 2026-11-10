@@ -344,7 +344,8 @@ it, or copy it anywhere it is not supposed to be.
   `docker volume ls` to find it.
 - **After updating the code**, a database you kept may need changes by hand. `./run.sh` runs
   `database_setup.py install` each time it starts, which creates missing tables but doesn't add new columns to
-  existing ones. A database created before step 2 started recording failures needs:
+  existing ones. (When a change adds a column, add its `ALTER TABLE` to this list.) A database created before
+  step 2 started recording failures needs:
   ```sql
   ALTER TABLE transcription_input ADD COLUMN ocr_status VARCHAR(20), ADD COLUMN ocr_error TEXT;
   ```
