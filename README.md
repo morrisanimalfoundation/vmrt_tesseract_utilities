@@ -266,8 +266,10 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 - `--threshold` (step 4) is the minimum confidence score, from 0 to 1, a detection needs before it is
   removed. The default `0.0` removes everything the model flags. Raising it lets identifiers through: some,
   such as ZIP codes and house numbers, score around 0.4. GRLS subject IDs written as `094-012345` (or with a
-  space, an en dash or nothing for the dash, a letter O for the first zero, or an extra zero after the dash)
-  are also matched by pattern with a score of 0.9, so those are removed at any threshold up to that.
+  space, an en dash or nothing for the dash, a letter O for the first zero, an extra zero after the dash, or
+  split across a line break or one blank line) are also matched by pattern with a score of 0.9, so those are
+  removed at any threshold up to that. A split ID's `<ID>` keeps its line breaks, so the lines around it stay
+  apart.
 - Step 4 records each file it tries as `success` or `failed` (`pii_scrubber_status` and `pii_scrubber_error` in
   `transcription_output`; `NULL` means not tried yet), saving each file as it finishes. A file that fails is
   left unscrubbed, with no scrubbed output, and the run keeps going and lists every failed file at the end.

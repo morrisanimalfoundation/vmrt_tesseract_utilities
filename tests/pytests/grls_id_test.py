@@ -70,14 +70,14 @@ def test_parse_id(text, expected):
     assert parse_id(text) == expected
 
 
-def test_ocr_subject_id_regex_is_unchanged():
+def test_ocr_subject_id_regex_expected_pattern():
     """
-    Tests that building the PII scrubber's regex from the shared constants produces the regex it used before.
+    Tests that the shared constants produce the expected OCR subject ID pattern.
 
     Asserts:
-        The regex is exactly the one the scrubber was written and tested with.
+        The regex includes the supported OCR formatting and line-break variants.
     """
-    assert ocr_subject_id_regex() == r'(?<!\d)[0O]94[-– ]?0?\d{6}(?!\d)'
+    assert ocr_subject_id_regex() == r'(?<!\d)[0O]94[-– ]?(?:(?:[ \t]*\r?\n){1,2}[ \t]*)?0?\d{6}(?!\d)'
 
 
 @pytest.mark.parametrize('text, expected', [
@@ -98,5 +98,36 @@ def test_ocr_subject_id_regex_matches(text, expected):
 
     Asserts:
         Exactly the expected IDs are found.
+    """
+    assert re.findall(ocr_subject_id_regex(), text) == expected
+
+
+@pytest.mark.parametrize('text, expected', [
+    ('094-\n003745', ['094-\n003745']),
+    ('094-\r\n 003745', ['094-\r\n 003745']),
+    ('094\n003745', ['094\n003745']),
+    ('094-00374', []),
+    ('094-\n00374', []),
+    ('094-\n0037459', ['094-\n0037459']),
+    ('094-\n00374599', []),
+    ('094-\nOther text\n003745', []),
+    ('094-\n\n003745', ['094-\n\n003745']),
+    ('094-\n \n003745', ['094-\n \n003745']),
+    ('094-\n\n\n003745', []),
+    ('094  003745', []),
+])
+def test_ocr_subject_id_regex_line_breaks(text, expected):
+    """
+    Tests the PII scrubber's regex on subject IDs split across line breaks.
+
+    Parameters:
+        text : str
+            The OCR'd text.
+        expected : list of str
+            The IDs that should be found.
+
+    Asserts:
+        A complete ID split by one or two line breaks is found, and an incomplete one, or one with other text or
+        more blank lines between its parts, is not.
     """
     assert re.findall(ocr_subject_id_regex(), text) == expected

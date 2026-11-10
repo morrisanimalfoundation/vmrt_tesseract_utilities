@@ -201,13 +201,27 @@ def test_recognizer_still_finds_entities(scrubbed, recognizer):
 
 
 @pytest.mark.parametrize('subject_id', ['094-012345', '094012345', '094-0012345', '0940012345',
-                                        '094 012345', '094–012345', 'O94-012345'])
+                                        '094 012345', '094–012345', 'O94-012345', '094-\n012345',
+                                        '094-\n\n012345'])
 def test_subject_id_is_removed_at_a_raised_threshold(analyzer, subject_id):
     """
     Test that a GRLS subject ID, in each form it takes in OCR'd text, is removed even with a raised threshold.
     """
     text, _ = pii_scrubber.scrub_pii(f'GRLS Subject ID: {subject_id}\n', analyzer, threshold=RAISED_THRESHOLD)
     assert '012345' not in text
+
+
+def test_split_subject_id_keeps_its_line_breaks(analyzer):
+    """
+    Test that a subject ID split across line breaks is replaced whole, without joining the lines around it.
+    """
+    text = 'Patient ID 094-\n\n012345 seen for a recheck.\nWeight 31.2 kg\n'
+
+    scrubbed, _ = pii_scrubber.scrub_pii(text, analyzer, threshold=RAISED_THRESHOLD)
+
+    assert '094' not in scrubbed and '012345' not in scrubbed
+    assert '<ID>\n\n' in scrubbed
+    assert scrubbed.count('\n') == text.count('\n')
 
 
 @pytest.mark.parametrize('number', ['1094-012345', '094-01234567', '9094012345'])

@@ -141,8 +141,10 @@ def ocr_subject_id_regex() -> str:
     Builds a regex that finds GRLS subject IDs in OCR'd text, for the PII scrubber.
 
     As well as the variants id_variants() lists, it allows a space or en dash in place of the dash and a letter O
-    read for the leading zero of the site prefix. \\d is used deliberately here: when scrubbing, matching too much is
-    safer than missing an ID.
+    read for the leading zero of the site prefix. It also allows the ID to be split across one or two line breaks
+    (with spaces or tabs around them) between the prefix and the suffix: Tesseract leaves a blank line between
+    paragraphs, and a document's pages are joined the same way. \\d is used deliberately here: when scrubbing,
+    matching too much is safer than missing an ID.
 
     Returns
     -------
@@ -152,8 +154,9 @@ def ocr_subject_id_regex() -> str:
     Examples
     --------
     >>> ocr_subject_id_regex()
-    '(?<!\\\\d)[0O]94[-– ]?0?\\\\d{6}(?!\\\\d)'
+    '(?<!\\\\d)[0O]94[-– ]?(?:(?:[ \\\\t]*\\\\r?\\\\n){1,2}[ \\\\t]*)?0?\\\\d{6}(?!\\\\d)'
     """
     first, rest = SITE_PREFIX[0], SITE_PREFIX[1:]
     leading = f'[{first}O]' if first == '0' else first
-    return rf'(?<!\d){leading}{rest}[-– ]?{SUFFIX_PADDING}?\d{{{SUFFIX_LENGTH}}}(?!\d)'
+    line_break = r'(?:(?:[ \t]*\r?\n){1,2}[ \t]*)?'
+    return rf'(?<!\d){leading}{rest}[-– ]?{line_break}{SUFFIX_PADDING}?\d{{{SUFFIX_LENGTH}}}(?!\d)'
