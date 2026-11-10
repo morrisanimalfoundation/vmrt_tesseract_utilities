@@ -358,6 +358,8 @@ def process_files(args: argparse.Namespace, process_filepath_data: list, analyze
             # Use the replacement file if it exists, otherwise use the OCR output.
             input_filepath = str(output_log.list_replacement_output_file or output_log.ocr_output_file)
             if output_log.pii_scrubber_status == STATUS_RETRYING and not args.retry_failed:
+                # A killed run may have written some of the file's outputs before it stopped.
+                remove_outputs(output_paths(args, input_filepath))
                 failed_ids.add(row_id)
                 record_failure(session, output_log, input_filepath, INTERRUPTED_TWICE_ERROR, failures)
                 continue

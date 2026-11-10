@@ -73,7 +73,8 @@ class TranscriptionOutput(Base):
     list_replacement_output_file: Mapped[Optional[str]] = mapped_column(String(PATH_LENGTH))
     pii_scrubber_output_file: Mapped[Optional[str]] = mapped_column(String(PATH_LENGTH))
     pii_scrubber_confidence_file: Mapped[Optional[str]] = mapped_column(String(PATH_LENGTH))
-    # 'success' or 'failed' once pii_scrubber has tried this file, None before that.
+    # 'started' (or 'retrying', after a run was cut short on it) while pii_scrubber is scrubbing this file, 'success'
+    # or 'failed' once it's done, None before it has been tried.
     pii_scrubber_status: Mapped[Optional[str]] = mapped_column(String(20))
     pii_scrubber_error: Mapped[Optional[str]] = mapped_column(Text)
 

@@ -8,6 +8,7 @@ installed in the workspace image, so the tests are skipped elsewhere.
 import argparse
 import logging
 import re
+from pathlib import Path
 
 import pytest
 import sqlalchemy
@@ -235,6 +236,25 @@ def test_file_cut_short_twice_is_marked_failed(tmp_path, engine, caplog):
 
     assert _run(tmp_path, analyzer) == []
     assert analyzer.lengths == []
+
+
+def test_file_cut_short_twice_leaves_no_output(tmp_path, engine):
+    """
+    Test that a file marked failed after being cut short twice doesn't leave behind outputs the killed runs wrote.
+    """
+    _kill_on_other(tmp_path)
+    with pytest.raises(_Killed):
+        _run(tmp_path, KilledOn('Killer'))
+    args = argparse.Namespace(output_to=str(tmp_path / 'output'), document_type='document')
+    outputs = [Path(path) for path in pii_scrubber.output_paths(args, str(tmp_path / 'other.txt'))]
+    for path in outputs:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('Partly written.\n')
+
+    _run(tmp_path, KilledOn('Killer'))
+
+    assert _statuses(engine)['other.pdf'] == ('failed', pii_scrubber.INTERRUPTED_TWICE_ERROR, False)
+    assert not any(path.exists() for path in outputs)
 
 
 def test_file_cut_short_once_succeeds_on_the_next_run(tmp_path, engine, caplog):
