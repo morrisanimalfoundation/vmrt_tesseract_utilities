@@ -227,7 +227,7 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 | `create_transcription_process.py` | `--document-type` | — | — | `--debug-sql` | |
 | `transcribe_pdfs.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--retry-failed`, `--shard` |
 | `replace_strings.py` | `--document-type` | `--chunk-size` | — | `--debug-sql` | `--max-workers`, `--no-multiprocessing`, `--until-done`, `--retry-failed` |
-| `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config`, `--until-done` |
+| `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config`, `--until-done`, `--retry-failed` |
 | `visit_date_miner.py` | — | `--chunk-size` | `--offset` | `--debug-sql` | `--visit-date-threshold`, `--search-unstructured-text-dir` |
 
 - **Document type** (`document`, `page`, or `block`; default `document`) controls how finely the OCR output
@@ -268,6 +268,20 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
   such as ZIP codes and house numbers, score around 0.4. GRLS subject IDs written as `094-012345` (or with a
   space, an en dash or nothing for the dash, a letter O for the first zero, or an extra zero after the dash)
   are also matched by pattern with a score of 0.9, so those are removed at any threshold up to that.
+- Step 4 records each file it tries as `success` or `failed` (`pii_scrubber_status` and `pii_scrubber_error` in
+  `transcription_output`; `NULL` means not tried yet), saving each file as it finishes. A file that fails is
+  left unscrubbed, with no scrubbed output, and the run keeps going and lists every failed file at the end.
+  Failed files are skipped on later runs; pass `--retry-failed` to try them again (each at most once per run).
+  The run exits with 0 even when files failed, as step 2 does, so check the list or the database.
+- Like step 2, step 4 marks each file `started` while scrubbing it. If the run is killed part way through a file,
+  the next run tries it once more as `retrying`, and if that attempt is cut short too, marks it `failed` with a
+  `ScrubInterrupted` error and skips it from then on. `--retry-failed` tries it again.
+- Step 4 analyzes long texts in pieces of up to 100,000 characters, each ending at a line break where possible,
+  since the NLP model refuses texts over 1,000,000 characters and needs about 1 GB of memory per 100,000 at
+  once. A whole study's records OCR'd as one `document` can be over a million characters; a 1.2 million
+  character text takes about 3 minutes and 1.3 GB. A piece never ends inside a subject ID. A name or address
+  that runs across a piece's boundary could be missed, which only happens on a line of text longer than the
+  piece.
 - Step 4 skips files it has already scrubbed. After changing `--threshold` or updating the scrubber, files
   scrubbed before the change keep their old output: to scrub them again, set `pii_scrubber_output_file` and
   `pii_scrubber_confidence_file` back to `NULL` for those rows in `transcription_output` and rerun step 4. In
@@ -331,6 +345,11 @@ it, or copy it anywhere it is not supposed to be.
   created before step 2 started recording failures needs:
   ```sql
   ALTER TABLE transcription_input ADD COLUMN ocr_status VARCHAR(20), ADD COLUMN ocr_error TEXT;
+  ```
+  and one created before step 4 started recording failures needs the following (step 4 stops with this
+  command if the columns are missing):
+  ```sql
+  ALTER TABLE transcription_output ADD COLUMN pii_scrubber_status VARCHAR(20), ADD COLUMN pii_scrubber_error TEXT;
   ```
   and one created before step 3 started recording failures needs:
   ```sql
