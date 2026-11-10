@@ -334,14 +334,10 @@ it, or copy it anywhere it is not supposed to be.
   ```
   The files in `output/` are not touched. Delete the `output` folder as well if you want those gone too;
   otherwise files from the old run stay next to the new ones.
-- **To start completely clean**, including deleting the database itself, exit the container and run these
+- **To start completely clean**, including deleting the database itself, exit the container and run this
   from the repository folder on your own computer, then delete the `output` folder and run `./run.sh` again:
   ```bash
-  docker compose down
-  docker volume rm vmrt_tesseract_utilities_mysql-data
-  ```
-  The volume name starts with the name of your repository folder; if you cloned it under another name, run
-  `docker volume ls` to find it.
+  docker compose down --volumes
 - **After updating the code**, a database you kept may need changes by hand. `./run.sh` runs
   `database_setup.py install` each time it starts, which creates missing tables but doesn't add new columns to
   existing ones. (When a change adds a column, add its `ALTER TABLE` to this list.) A database created before
