@@ -102,7 +102,7 @@ def test_every_ocr_result_has_its_own_database_row(
 
     args = argparse.Namespace(
         output_to=str(tmp_path), document_type=mode,
-        chunk_size=10, offset=0, retry_failed=False, debug_sql=False,
+        chunk_size=10, offset=0, retry_failed=False, shard=None, debug_sql=False,
     )
     transcribe_pdfs.run_tesseract(args)
 
