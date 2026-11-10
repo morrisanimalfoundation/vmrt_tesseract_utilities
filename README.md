@@ -319,7 +319,9 @@ it, or copy it anywhere it is not supposed to be.
   `docker-compose.yml`) that survives `exit`, `docker compose down` and restarting your computer. The next
   `./run.sh` reconnects to it and only creates the database and tables if they are missing, so you can stop
   part way through a long step and pick up where you left off: rerun the same step, and it skips the files that
-  are already done.
+  are already done. Sessions before November 2026 each left an unnamed volume behind instead;
+  `docker volume ls -f dangling=true` lists them. Check that one doesn't belong to another project before
+  deleting it with `docker volume rm`.
 - **To open a second terminal** in the running container (to look at files while a step runs, say), run
   this from a new terminal window on your own computer. Do not run `./run.sh` a second time for this: when you
   exit either shell, its `docker compose down` stops the containers under the other one too.
