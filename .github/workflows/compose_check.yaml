@@ -1,0 +1,32 @@
+# Checks that docker-compose.yml is valid whenever it or example.env changes, so a broken file is caught before
+# ./run.sh fails for everyone. `docker compose config` reads the file the way `docker compose up` does, with the
+# example .env, and fails on unknown keys, wrong types and missing variables.
+name: Compose Check
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - docker-compose.yml
+      - example.env
+      - .github/workflows/compose_check.yaml
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - docker-compose.yml
+      - example.env
+      - .github/workflows/compose_check.yaml
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate docker-compose.yml
+        run: |
+          cp example.env .env
+          docker compose config --quiet

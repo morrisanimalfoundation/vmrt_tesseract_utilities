@@ -120,7 +120,8 @@ Change the path to the folder on **your** computer that holds the EMR PDFs. Two 
 
 The folder must already exist. The scripts look for the dog's subject ID (`094-` followed by six digits,
 e.g. `094-000520`) somewhere in each file's folder path; files that are not under a folder named with a
-subject ID are skipped.
+subject ID are skipped. The ID can't touch other digits: a folder named `094-0001312` or `1094-000131` is
+skipped, with a warning in the log, rather than being filed under dog `094-000131`.
 
 > This edit is specific to your computer. **Do not commit it** — see [Working with git](#working-with-git).
 
@@ -130,7 +131,7 @@ subject ID are skipped.
 ./run.sh
 ```
 
-The first run downloads the prebuilt workspace image (about 1.4 GB) and the MySQL image, which takes a few
+The first run downloads the prebuilt workspace image (about 1 GB) and the MySQL image, which takes a few
 minutes depending on your connection. Later runs only download what has changed. When it finishes you will see
 a new prompt that looks something like this:
 
@@ -155,13 +156,19 @@ Run these five commands in order, inside the container, from `/workspace`. Wait 
 before starting the next. The copy-paste versions below use the default settings.
 
 **1. Register files for processing** — walks `/data`, reads each dog's subject ID from the folder path, and
-queues the files. Run this **once** per session; running it again queues every file a second time.
+queues the PDFs (other files in the folders, such as image viewer exports, are skipped). Running it again only
+adds PDFs that aren't registered yet, so rerun it after new records arrive.
 
 ```bash
 python scripts/create_transcription_process.py /data
 ```
 
-**2. Run OCR** — runs Tesseract over the queued PDFs. This is the slow step.
+**2. Run OCR** — runs Tesseract over the queued PDFs. This is the slow step. A page that reads poorly is
+checked for being scanned sideways or upside down, and if it was, it's turned upright and read again. Before
+November 2026, pages upside down or turned 90 degrees counter-clockwise
+came out as garbage, and every later step worked from that text. To redo records processed before then, start
+over from step 1 with a fresh database, as `./run.sh` does each time it starts. In a database you kept, steps 2
+to 5 skip the files they have already processed, so running them again changes nothing.
 
 ```bash
 python scripts/transcribe_pdfs.py /workspace/output
@@ -187,7 +194,8 @@ Once no files are left to process, the script also checks that every file alread
 The script exits with code 0 when everything succeeded, 3 when it finished but some files failed or are missing, and 1 if it couldn't run at all. A scheduler such as Jenkins can tell 3 apart from a crash, but **don't start step 4 until every replacement pass exits with 0**: a failed file still contains the strings the pass should have replaced, and step 4 would scrub and save it anyway, with no later chance to remove them.
 
 **4. Scrub PII** — uses an NLP model to find and remove names, addresses, phone numbers, and similar. The
-first time you run this in a session it downloads the model, which needs an internet connection.
+model is built into the image at a pinned version, so no internet connection is needed (see **Updating the PII
+scrubber's model** below).
 
 ```bash
 python scripts/scrubbers/pii_scrubber.py /workspace/output
@@ -217,9 +225,9 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 | Script | Document type | Batch size | Skip records | Show SQL | Other |
 | --- | --- | --- | --- | --- | --- |
 | `create_transcription_process.py` | `--document-type` | — | — | `--debug-sql` | |
-| `transcribe_pdfs.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--retry-failed` |
+| `transcribe_pdfs.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--retry-failed`, `--shard` |
 | `replace_strings.py` | `--document-type` | `--chunk-size` | — | `--debug-sql` | `--max-workers`, `--no-multiprocessing`, `--until-done`, `--retry-failed` |
-| `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config`, `--until-done` |
+| `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config`, `--until-done`, `--retry-failed` |
 | `visit_date_miner.py` | — | `--chunk-size` | `--offset` | `--debug-sql` | `--visit-date-threshold`, `--search-unstructured-text-dir` |
 
 - **Document type** (`document`, `page`, or `block`; default `document`) controls how finely the OCR output
@@ -228,15 +236,52 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 - **Batch size** defaults to 1000 files per run in steps 2, 3, and 4. If you have more than 1000 files,
   re-run steps 2 and 4 until they stop finding files (step 2 prints `Found 0 files to transcribe`, step 4
   `Found 0 files to scrub`), or pass `--until-done` to step 4 to scrub every batch in one run. Step 3 skips files already completed for that replacement pass, so rerun the same command to process the next batch; no `--offset` is needed.
-- Step 2 records each PDF it tries as `success` or `failed` (`ocr_status` and `ocr_error` in
-  `transcription_input`), keeps going after a failure, and lists every failed file at the end. Failed files are
+- Step 2 records each PDF it finishes as `success` or `failed` (`ocr_status` and `ocr_error` in
+  `transcription_input`; `NULL` means not tried yet), keeps going after a failure, and lists every failed file at the end. Failed files are
   skipped on later runs; pass `--retry-failed` to try them again. If poppler or Tesseract isn't usable, step 2
   stops before touching any file.
+- Step 2 marks each PDF `started` while reading it. If the run is killed part way through a PDF (it ran out of
+  memory, or the job was stopped), the next run finds it still `started` and tries it once more as `retrying`. If
+  that attempt is cut short too, the PDF is marked `failed` with an `OcrInterrupted` error and skipped from then
+  on, so one PDF that always runs out of memory can't stop every later run. `--retry-failed` tries it again. A
+  PDF left `started` or `retrying` still counts as waiting to be transcribed.
+- Step 2 renders pages at 200 dpi. A page too large for that is rendered at the highest resolution that keeps it
+  under Pillow's image size limit (179M pixels) and Tesseract's limit of 32,767 pixels on a side, and the log says
+  which resolution it used. This is usually a scan whose page size was set to several feet across, or a long, thin
+  page such as a receipt. A page that would need less than 50 dpi fails with
+  `PageTooLargeError` instead, since its text would be too small to read. A page at the limit takes about 4 GB of
+  memory during OCR, so allow for that when choosing how many `--shard` runs to start at once.
+- `--shard i/N` (step 2) runs OCR in parallel. Each run uses about one CPU core, so start N runs at once with
+  `--shard 0/N`, `--shard 1/N`, ... `--shard N-1/N`: each takes only the PDFs whose database ID leaves remainder
+  `i` when divided by N, so no two runs pick the same file. Don't use `--offset` for this: it counts from the
+  files still waiting, which shrinks as the other runs finish files, so parallel runs skip some files and repeat
+  others. Rerun each shard until it prints `Found 0 files to transcribe`.
+  - **Every run going at the same time must use the same N.** Nothing in the database marks a file as taken, so
+    runs with different N overlap (`0/2` and `0/3` both take ID 6) and OCR the same files twice, giving them
+    extra output rows. A run can also find a PDF another run is reading still `started`, take it for one a killed
+    run left behind, and in the end mark it failed with `OcrInterrupted`. To change N, stop every run first; files they finished are skipped from then on, as are
+    files that failed (add `--retry-failed` to try those again).
+  - The split is even when database IDs go up by 1, which is MySQL's default. On a server set up to step IDs by
+    more (`auto_increment_increment`), some shards get no files.
 - `--threshold` (step 4) is the minimum confidence score, from 0 to 1, a detection needs before it is
   removed. The default `0.0` removes everything the model flags. Raising it lets identifiers through: some,
   such as ZIP codes and house numbers, score around 0.4. GRLS subject IDs written as `094-012345` (or with a
   space, an en dash or nothing for the dash, a letter O for the first zero, or an extra zero after the dash)
   are also matched by pattern with a score of 0.9, so those are removed at any threshold up to that.
+- Step 4 records each file it tries as `success` or `failed` (`pii_scrubber_status` and `pii_scrubber_error` in
+  `transcription_output`; `NULL` means not tried yet), saving each file as it finishes. A file that fails is
+  left unscrubbed, with no scrubbed output, and the run keeps going and lists every failed file at the end.
+  Failed files are skipped on later runs; pass `--retry-failed` to try them again (each at most once per run).
+  The run exits with 0 even when files failed, as step 2 does, so check the list or the database.
+- Like step 2, step 4 marks each file `started` while scrubbing it. If the run is killed part way through a file,
+  the next run tries it once more as `retrying`, and if that attempt is cut short too, marks it `failed` with a
+  `ScrubInterrupted` error and skips it from then on. `--retry-failed` tries it again.
+- Step 4 analyzes long texts in pieces of up to 100,000 characters, each ending at a line break where possible,
+  since the NLP model refuses texts over 1,000,000 characters and needs about 1 GB of memory per 100,000 at
+  once. A whole study's records OCR'd as one `document` can be over a million characters; a 1.2 million
+  character text takes about 3 minutes and 1.3 GB. A piece never ends inside a subject ID. A name or address
+  that runs across a piece's boundary could be missed, which only happens on a line of text longer than the
+  piece.
 - Step 4 skips files it has already scrubbed. After changing `--threshold` or updating the scrubber, files
   scrubbed before the change keep their old output: to scrub them again, set `pii_scrubber_output_file` and
   `pii_scrubber_confidence_file` back to `NULL` for those rows in `transcription_output` and rerun step 4. In
@@ -301,10 +346,35 @@ it, or copy it anywhere it is not supposed to be.
   ```sql
   ALTER TABLE transcription_input ADD COLUMN ocr_status VARCHAR(20), ADD COLUMN ocr_error TEXT;
   ```
+  and one created before step 4 started recording failures needs the following (step 4 stops with this
+  command if the columns are missing):
+  ```sql
+  ALTER TABLE transcription_output ADD COLUMN pii_scrubber_status VARCHAR(20), ADD COLUMN pii_scrubber_error TEXT;
+  ```
   and one created before step 3 started recording failures needs:
   ```sql
   ALTER TABLE string_replacement_completion
     ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'success', ADD COLUMN error TEXT;
+  ```
+  One created before the file path columns were widened to 512 characters stores paths of up to 255, and step 1
+  warns about it and skips longer paths. To widen them:
+  ```sql
+  ALTER TABLE transcription_input MODIFY input_file VARCHAR(512) COLLATE utf8mb4_0900_bin;
+  ALTER TABLE transcription_output
+    MODIFY ocr_output_file VARCHAR(512), MODIFY list_replacement_output_file VARCHAR(512),
+    MODIFY pii_scrubber_output_file VARCHAR(512), MODIFY pii_scrubber_confidence_file VARCHAR(512);
+  ```
+  And one registered before step 1 took only PDFs also holds every other file in the EMR folders (image viewer
+  exports, lock files and so on). Step 1 warns about these; OCR skips them, but they have metadata rows. To
+  remove the ones that were never transcribed (metadata first, as it points at the inputs):
+  ```sql
+  DELETE m FROM transcription_metadata m
+    JOIN transcription_input i ON m.input_id = i.id
+    LEFT JOIN transcription_output o ON o.input_id = i.id
+    WHERE o.id IS NULL AND (LOWER(i.input_file) NOT LIKE '%.pdf' OR i.input_file LIKE '%/.!_%' ESCAPE '!');
+  DELETE i FROM transcription_input i
+    LEFT JOIN transcription_output o ON o.input_id = i.id
+    WHERE o.id IS NULL AND (LOWER(i.input_file) NOT LIKE '%.pdf' OR i.input_file LIKE '%/.!_%' ESCAPE '!');
   ```
 
 ## Reference data files
@@ -407,6 +477,32 @@ rather than with `git add .`, so nothing extra is swept in.
   pytest
   ```
   Run a single test with `pytest tests/pytests/string_replacer_test.py::test_replace_single_string`.
+- **Coverage**: add `--cov` to a pytest command to see which lines no test runs (configured in
+  `pyproject.toml`; it covers `vmrt_tesseract_utilities/` and `scripts/`), for example `pytest --cov`. The
+  `Missing` column lists the line numbers. Outside the image the tests that need the image's packages are
+  skipped, so their code shows as not covered. For the real numbers, run it inside the image. The container's
+  user can't write to your repository folder, so `COVERAGE_FILE` puts coverage's data file in the container
+  instead:
+  ```bash
+  docker run --rm --user 1234:1234 -v "$PWD:/workspace" -e COVERAGE_FILE=/tmp/.coverage ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities:main sh -c "pip install --user -r requirements/pytest_requirements.txt && python -m pytest -p no:cacheprovider --cov"
+  ```
+  CI does the same and shows the per-file totals in each `Docker Image` run's summary. There is no minimum yet.
+- **Pipeline test**: `tests/pipeline_test.py` runs all five pipeline steps in document and page mode against a
+  real MySQL database, on synthetic records for made-up dogs, and checks that every step filled in its database
+  columns, removed what it should and found the planted visit dates. It takes under a minute. To run it locally,
+  from the repository folder (it uses its own MySQL container and network, separate from `./run.sh`'s):
+  ```bash
+  docker network create vmrt-pipeline-test
+  docker run -d --name vmrt-pipeline-mysql --network vmrt-pipeline-test -e MYSQL_ROOT_PASSWORD=test -e MYSQL_DATABASE=vmrt_emr_transcription mysql:8.0 --default-authentication-plugin=mysql_native_password
+  docker run --rm --user 1234:1234 --network vmrt-pipeline-test -v "$PWD:/workspace:ro" -e SQL_CONNECTION_STRING=mysql+pymysql://root:test@vmrt-pipeline-mysql:3306/vmrt_emr_transcription ghcr.io/morrisanimalfoundation/vmrt_tesseract_utilities:main python tests/pipeline_test.py
+  docker rm -f vmrt-pipeline-mysql && docker network rm vmrt-pipeline-test
+  ```
+  It refuses to run against a database that already has data in it, so recreate the MySQL container before
+  running it again. Test PDFs, here and in the OCR tests, are generated by `tests/synthetic_pdfs.py`; use it for
+  any new test that needs one, and never use real records.
+- **OCR accuracy**: `tests/pytests/ocr_accuracy_test.py` compares OCR text with the known text of generated pages
+  (paragraphs, a table, small print, and every orientation), so an update that makes OCR worse fails the tests,
+  not only one that breaks it. It runs inside the image with the rest of the test suite.
 - **Linting**: `./sort_and_lint.sh` runs `isort` and `flake8` (line length is not enforced). Install
   dependencies first with `pip install -r requirements/ci_requirements.txt`.
 - Both checks run automatically on every pull request to `main`. Pull requests that change code, tests, or the
@@ -421,8 +517,8 @@ rather than with `git add .`, so nothing extra is swept in.
   only; the code is mounted from your copy of the repository, so code changes never need a new image. The
   `Docker Image` workflow (`.github/workflows/docker_image.yaml`) rebuilds and publishes it when `Dockerfile`
   or the requirements change on `main`, and weekly (from scratch, with Debian's latest security fixes). Pull
-  requests that touch those files, the code or the tests are built and checked with `tests/docker_smoke_test.py`
-  and the full test suite (which fails if any test is skipped) but not published.
+  requests that touch those files, the code or the tests are built and checked with `tests/docker_smoke_test.py`,
+  the full test suite (which fails if any test is skipped) and the pipeline test (below), but not published.
   If you are changing `Dockerfile`, `requirements.in`, or `requirements.txt`, use `./run.sh --build` to build
   the image locally instead (a few minutes), and run the smoke test from the repository folder:
   ```bash
@@ -442,7 +538,7 @@ rather than with `git add .`, so nothing extra is swept in.
   it, so don't edit `requirements.txt` by hand. To regenerate it, run this from the repository folder, outside
   the container (it uses the same Python version as the Docker image):
   ```bash
-  docker run --rm -v "$PWD:/src" -w /src python:3.11 sh -c "pip install -q pip-tools==7.6.2 && pip-compile --strip-extras requirements.in"
+  docker run --rm -v "$PWD:/src" -w /src python:3.11-slim sh -c "pip install -q pip-tools==7.6.2 && pip-compile --strip-extras requirements.in"
   ```
   Existing pins are kept; add `--upgrade` only when you mean to update them. Keep `presidio_analyzer[transformers]`
   and `torch` in `requirements.in` (the PII scrubber needs them) and keep the CPU-only PyTorch index line at the
@@ -452,6 +548,28 @@ rather than with `git add .`, so nothing extra is swept in.
   version that still fits, so always regenerate the file with the command above.
   `requirements/pytest_requirements.txt` pins only the test tools and takes every other version from
   `requirements.txt`, so a version change there applies to the tests too.
+- **Updating the PII scrubber's model**: the image contains one fixed revision of the
+  `StanfordAIMI/stanford-deidentifier-base` model from Hugging Face, so the scrubber only changes when we choose,
+  and it never downloads anything at run time (`HF_HUB_OFFLINE=1`). To move to a newer revision on purpose:
+  1. On the model's Hugging Face page, open **Files and versions**, pick the commit and copy its full hash.
+     Check which files it has: the `Dockerfile` downloads `config.json`, `pytorch_model.bin`,
+     `special_tokens_map.json`, `tokenizer_config.json` and `vocab.txt`.
+  2. Print the files' SHA-256 checksums (replace `<hash>` with the commit hash):
+     ```bash
+     for f in config.json pytorch_model.bin special_tokens_map.json tokenizer_config.json vocab.txt; do
+       echo "$(curl -fsSL https://huggingface.co/StanfordAIMI/stanford-deidentifier-base/resolve/<hash>/$f | sha256sum | cut -d' ' -f1) $f"
+     done
+     ```
+  3. In `Dockerfile`, set `SCRUBBER_MODEL_REVISION` to the hash and replace the checksums listed for the model's
+     files. Build with `./run.sh --build` and run the tests inside the image (see above).
+  4. `tests/pytests/pii_scrubber_test.py` fails until `BASELINE_MODEL` names the new revision. Before changing
+     it, check whether the new revision scrubs worse (identifiers that leak, medical text removed), then update
+     `BASELINE_MODEL` and, if they changed, `BASELINE_COUNTS`.
+
+  The scrubber's config (`scripts/scrubbers/config/stanford-deidentifier-base_nlp.yaml`) points at the folder the
+  model is saved in, so it needs an image built from this repository's `Dockerfile` of November 2026 or later.
+  On an older image (such as a `sha-` tag from before then), the scrubber stops with an error saying the model
+  folder doesn't exist. `./run.sh` pulls the latest image every time it starts.
 
 ## License
 

@@ -1,15 +1,11 @@
 import re
 from typing import List
 
+from vmrt_tesseract_utilities.grls_id import id_variants
+
 """
 Provides string replacement functionality.
 """
-
-# Matches GRLS subject IDs specifically (a 3-digit site prefix, a dash, and a
-# 6-digit suffix, e.g. "094-000520"), so that variant formats appearing in OCR'd
-# text can also be matched, without also expanding unrelated digit-dash-digit
-# strings (date ranges, kennel numbers, etc.) that a target list might contain.
-GRLS_ID_RE = re.compile(r'^(\d{3})-(\d{6})$')
 
 
 class StringReplacer:
@@ -55,37 +51,7 @@ class StringReplacer:
         self._patterns = [self._build_pattern(target) for target in self.target_strings]
 
     @staticmethod
-    def _expand_id_variants(target: str) -> List[str]:
-        """
-        Expands a GRLS-style subject ID into the variant forms it may appear as in
-        OCR'd text. Strings that don't look like a GRLS ID are returned unchanged.
-
-        Parameters
-        ----------
-        target : str
-            The candidate target string.
-
-        Returns
-        -------
-        list of str
-            The target string, plus any additional ID variants.
-        """
-        match = GRLS_ID_RE.match(target)
-        if not match:
-            return [target]
-        prefix, suffix = match.groups()
-        padded_suffix = f'0{suffix}'
-        # prefix and suffix are always non-empty digit strings, so these four
-        # variants are always pairwise distinct.
-        return [
-            target,
-            f'{prefix}{suffix}',
-            f'{prefix}-{padded_suffix}',
-            f'{prefix}{padded_suffix}',
-        ]
-
-    @classmethod
-    def _build_pattern(cls, target: str) -> re.Pattern:
+    def _build_pattern(target: str) -> re.Pattern:
         """
         Builds a single compiled pattern matching a target string and all of its
         ID variants, so the text only needs to be scanned once per target.
@@ -100,9 +66,10 @@ class StringReplacer:
         re.Pattern
             A compiled, case-insensitive pattern matching any variant of the target.
         """
-        is_id = bool(GRLS_ID_RE.match(target))
+        id_forms = id_variants(target)
+        is_id = bool(id_forms)
         # Longest first, so a variant that's a prefix of another isn't matched short.
-        variants = sorted(cls._expand_id_variants(target), key=len, reverse=True)
+        variants = sorted(id_forms or [target], key=len, reverse=True)
         alternation = '|'.join(re.escape(variant) for variant in variants)
         if is_id:
             # ID variants start and end with digits; without a boundary check, one
