@@ -121,8 +121,8 @@ def do_create_transcription_process(args: argparse.Namespace) -> None:
                 stdout_logger.warning(
                     f'These path columns hold fewer than {PATH_LENGTH} characters, as the database was created '
                     f'before they were widened: {listed}. Longer input paths are skipped here, and a long output '
-                    f'path would fail in a later step. To widen them, start from a fresh database or see "If you '
-                    f'keep a database between runs" in the README.'
+                    f'path would fail in a later step. To widen them, empty the database or see "After updating the '
+                    f'code" under "Stopping, restarting, and starting over" in the README.'
                 )
             registered_paths = {
                 path for (path,) in (
@@ -143,8 +143,8 @@ def do_create_transcription_process(args: argparse.Namespace) -> None:
             if leftover:
                 stdout_logger.warning(
                     f'{leftover} files already registered as "{args.document_type}" aren\'t PDFs, from a registration '
-                    f'that took every file. OCR skips them; to remove them, see "If you keep a database between runs" '
-                    f'in the README.'
+                    f'that took every file. OCR skips them; to remove them, see "After updating the code" under '
+                    f'"Stopping, restarting, and starting over" in the README.'
                 )
             for subdir, dirs, files in os.walk(root):
                 dog_id = find_subject_id(subdir)

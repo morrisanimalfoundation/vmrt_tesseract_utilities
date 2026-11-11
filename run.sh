@@ -27,10 +27,12 @@ fi
 # Start the containers in detached mode.
 docker compose up -d
 
-# Wait for the database container to start (with a timeout).
+# Wait for the database container to start (with a timeout), then create the database if it isn't there yet.
+# The database is kept between sessions (see the mysql-data volume in docker-compose.yml), so this never erases
+# it. To start over, see "Stopping, restarting, and starting over" in the README.
 TIMEOUT=30
 COUNTER=0
-until $(docker exec -i vmrt-emr-process-log-mysql mysql -uroot -p$SQL_PASSWORD -e "DROP DATABASE IF EXISTS vmrt_emr_transcription; CREATE DATABASE vmrt_emr_transcription;") || [[ $COUNTER -eq $TIMEOUT ]]; do
+until $(docker exec -i vmrt-emr-process-log-mysql mysql -uroot -p$SQL_PASSWORD -e "CREATE DATABASE IF NOT EXISTS vmrt_emr_transcription;") || [[ $COUNTER -eq $TIMEOUT ]]; do
   echo "Waiting for database container to start... ($COUNTER/$TIMEOUT)"
   sleep 1
   COUNTER=$((COUNTER+1))
@@ -38,12 +40,14 @@ done
 
 if [[ $COUNTER -eq $TIMEOUT ]]; then
   echo "Error: Timeout waiting for database container."
+  echo "If the errors above say \"Access denied for user 'root'\", see that entry under Troubleshooting in the README:"
+  echo "the database keeps the password it was created with."
   exit 1
 fi
 
-echo "Database initialized successfully."
+echo "Database ready."
 
-# Execute the Python script.
+# Create any missing tables. Existing tables and their rows are left alone.
 if ! docker exec -t vmrt-emr-workspace python ./scripts/database_setup.py install; then
   echo "Error: Failed to execute Python script."
   exit 1
@@ -52,5 +56,5 @@ fi
 # Provide an interactive Bash shell within the container.
 docker exec -it vmrt-emr-workspace bash
 
-# Stop and remove the containers.
+# Stop and remove the containers. The database volume is kept.
 docker compose down
