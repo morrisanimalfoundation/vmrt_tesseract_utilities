@@ -1,5 +1,6 @@
 import argparse
 import csv
+import json
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -12,6 +13,7 @@ from scripts.metadata_miners.visit_date_miner import (
     save_visit_dates, select_files_to_check, set_visit_dates_from_files)
 from vmrt_tesseract_utilities.database import (Base, TranscriptionInput,
                                                TranscriptionMetadata)
+from vmrt_tesseract_utilities.date_extractor import DateExtractor
 
 
 @pytest.fixture
@@ -498,3 +500,48 @@ def test_get_dates_from_tsv(
 
     result = get_dates_from_tsv(str(tsv_file), grls_id, target_column)
     assert result == expected_dates
+
+
+def test_confidence_report_dates_only(tmp_path):
+    """
+    Test that only a confidence report's dates are read, not a house number or phone number that parses as one,
+    even when the model read the house number as a date.
+
+    "2015 Oak St" parses as a date in 2015 and "2018 W. Harbor Blvd Suite 4" as 2018-04-13.
+    """
+    report = tmp_path / 'confidence.json'
+    report.write_text(json.dumps([
+        {'Original Text': '2015 Oak St', 'Type': 'ADDRESS', 'Start': 0, 'End': 11, 'Score': 0.9, 'Scrubbed': True},
+        {'Original Text': '2018 W. Harbor Blvd Suite 4', 'Type': 'LOCATION', 'Start': 20, 'End': 47, 'Score': 0.9,
+         'Scrubbed': True},
+        # The model read the house number as a date, but it was replaced with the address.
+        {'Original Text': '2015', 'Type': 'DATE_TIME', 'Start': 0, 'End': 4, 'Score': 0.8, 'Scrubbed': True},
+        {'Original Text': 'March 14, 2023', 'Type': 'DATE_TIME', 'Start': 60, 'End': 74, 'Score': 1.0,
+         'Scrubbed': False},
+    ]))
+
+    assert DateExtractor(str(report)).extract_dates_from_file() == [datetime(2023, 3, 14)]
+
+
+def test_confidence_report_without_scrubbed_field(tmp_path):
+    """
+    Test that a report written before the "Scrubbed" field was added is read the same way.
+    """
+    report = tmp_path / 'confidence.json'
+    report.write_text(json.dumps([
+        {'Original Text': '2015 Oak St', 'Type': 'LOCATION', 'Start': 0, 'End': 11, 'Score': 0.9},
+        {'Original Text': '09/14/2023', 'Type': 'DATE_TIME', 'Start': 20, 'End': 30, 'Score': 1.0},
+    ]))
+
+    assert DateExtractor(str(report)).extract_dates_from_file() == [datetime(2023, 9, 14)]
+
+
+def test_other_json_is_searched_whole(tmp_path):
+    """
+    Test that JSON that isn't a confidence report is still searched in full.
+    """
+    data_file = tmp_path / 'data.json'
+    data_file.write_text(json.dumps({'visits': ['2023-03-14', {'next': '2023-09-14'}]}))
+
+    assert sorted(DateExtractor(str(data_file)).extract_dates_from_file()) == [datetime(2023, 3, 14),
+                                                                               datetime(2023, 9, 14)]

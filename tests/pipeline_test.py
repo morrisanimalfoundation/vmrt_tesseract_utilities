@@ -23,6 +23,7 @@ It refuses to run against a database that already has pipeline data in it. It ex
 import csv
 import datetime
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -85,6 +86,7 @@ def record_header(dog: Dog, owner: str, phone: str) -> List[str]:
     """
     return [
         'Sunny Meadows Animal Hospital',
+        '1428 Larkspur Lane, Springfield, OR 97477',
         f'Patient: {dog.call_name}   GRLS ID: {dog.subject_id}',
         f'Owner: {owner}   Phone: {phone}',
     ]
@@ -135,7 +137,11 @@ def make_dogs() -> List[Dog]:
 
 
 # Identifiers the scrubber (step 4) should remove from the text. Subject IDs and dog names are removed by step 3.
-SCRUBBED_IDENTIFIERS = ['Margaret Thompson', 'Daniel Okafor', '555-0163', '555-0118', 'Alan Whitaker']
+SCRUBBED_IDENTIFIERS = ['Margaret Thompson', 'Daniel Okafor', '555-0163', '555-0118', 'Alan Whitaker',
+                        '1428 Larkspur Lane', 'Springfield', 'OR 97477']
+
+# A record's visit date line, which the scrubber should leave in the text.
+VISIT_DATE_LINE_RE = re.compile(r'Visit date: [A-Z][a-z]+ [0-9]{1,2}, [0-9]{4}')
 
 
 def write_inputs(root: str, dogs: List[Dog]) -> Tuple[str, str, str]:
@@ -316,6 +322,9 @@ def check_output(name: str, output: TranscriptionOutput, dog: Dog) -> List[str]:
     for identifier in [dog.subject_id, dog.call_name] + SCRUBBED_IDENTIFIERS:
         if identifier.lower() in scrubbed.lower():
             problems.append(f'{name}: {identifier!r} is still in the scrubbed output')
+    for visit_date_line in VISIT_DATE_LINE_RE.findall(replaced):
+        if visit_date_line not in scrubbed:
+            problems.append(f'{name}: {visit_date_line!r} was scrubbed, but dates should be kept')
     return problems
 
 

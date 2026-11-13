@@ -3,6 +3,9 @@ import json
 import os
 import re
 import sys
+from bisect import bisect_left, bisect_right
+from functools import partial
+from itertools import accumulate
 
 import yaml
 from presidio_analyzer import (AnalyzerEngine, Pattern, PatternRecognizer,
@@ -19,6 +22,12 @@ from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                get_database_session)
 from vmrt_tesseract_utilities.grls_id import ocr_subject_id_regex
 from vmrt_tesseract_utilities.logging import log_run_summary, stdout_logger
+from vmrt_tesseract_utilities.pii_patterns import (ADDRESS_PATTERNS,
+                                                   ADDRESS_REGEX_FLAGS,
+                                                   URL_PATTERNS,
+                                                   URL_REGEX_FLAGS,
+                                                   address_around,
+                                                   is_date_part, is_initials)
 from vmrt_tesseract_utilities.scrubbing_utils import (split_text,
                                                       write_scrubbed_txt)
 
@@ -27,6 +36,14 @@ Leverages presidio to attempt automatic PII stripping.
 """
 
 EXCLUDE_TYPES = frozenset(['IN_PAN'])  # Use frozenset for efficient lookups.
+
+# Entity types that are found and listed in the confidence report, but left in the text. Dates don't identify a dog
+# or owner once their names are gone, and the visit date miner (step 5) reads them from the report.
+KEEP_TYPES = frozenset(['DATE_TIME'])
+
+# The entity type of an address found by ADDRESS_PATTERNS. Any other detection overlapping an address is merged into
+# it, so the whole address is replaced as one, rather than, say, its city as a location and its ZIP code as an ID.
+ADDRESS = 'ADDRESS'
 
 # The values of TranscriptionOutput.pii_scrubber_status. A file is STARTED while it's being scrubbed, RETRYING while
 # it's being scrubbed again after a run was cut short on it, and SUCCESS or FAILED once it's done. NULL means it
@@ -64,15 +81,20 @@ SUBJECT_ID_PATTERN = Pattern(name='GRLS subject ID', regex=ocr_subject_id_regex(
 # pieces in the middle of a subject ID, including one the pattern matches across a space or line break.
 SUBJECT_ID_RE = re.compile(SUBJECT_ID_PATTERN.regex, re.DOTALL | re.MULTILINE | re.IGNORECASE)
 
+SUBJECT_ID_RECOGNIZER_NAME = 'GrlsSubjectIdRecognizer'
 
-def replace_id(value: str) -> str:
+
+def replace_keeping_line_breaks(placeholder: str, value: str) -> str:
     """
-    Replaces an ID with <ID>, keeping any line breaks it was split across, so the lines around it stay apart.
+    Replaces an entity with a placeholder, keeping any line breaks it was split across, so the lines around it stay
+    apart.
 
     Parameters
     ----------
+    placeholder : str
+        The placeholder, such as <ID>.
     value : str
-        The ID's text.
+        The entity's text.
 
     Returns
     -------
@@ -81,16 +103,19 @@ def replace_id(value: str) -> str:
 
     Examples
     --------
-    >>> replace_id('094-\\n\\n012345')
+    >>> replace_keeping_line_breaks('<ID>', '094-\\n\\n012345')
     '<ID>\\n\\n'
-    >>> replace_id('094-012345')
-    '<ID>'
+    >>> replace_keeping_line_breaks('<ADDRESS>', '1428 Larkspur Lane, Springfield, OR 97477')
+    '<ADDRESS>'
     """
-    return '<ID>' + '\n' * value.count('\n')
+    return placeholder + '\n' * value.count('\n')
 
 
 # How each entity type is replaced. Types not listed get the default, <ENTITY_TYPE>.
-ANONYMIZE_OPERATORS = {'ID': OperatorConfig('custom', {'lambda': replace_id})}
+ANONYMIZE_OPERATORS = {
+    entity_type: OperatorConfig('custom', {'lambda': partial(replace_keeping_line_breaks, f'<{entity_type}>')})
+    for entity_type in ('ID', ADDRESS)
+}
 
 
 def create_subject_id_recognizer() -> PatternRecognizer:
@@ -104,7 +129,42 @@ def create_subject_id_recognizer() -> PatternRecognizer:
     PatternRecognizer
         The subject ID recognizer.
     """
-    return PatternRecognizer(supported_entity='ID', name='GrlsSubjectIdRecognizer', patterns=[SUBJECT_ID_PATTERN])
+    return PatternRecognizer(supported_entity='ID', name=SUBJECT_ID_RECOGNIZER_NAME, patterns=[SUBJECT_ID_PATTERN])
+
+
+def create_address_recognizer() -> PatternRecognizer:
+    """
+    Creates the pattern recognizer for US street addresses, PO boxes and city, state and ZIP lines.
+
+    The model finds parts of addresses (a city, or a ZIP code it calls an ID) but often misses the street and state,
+    and a partial clinic address can point toward an owner's.
+
+    Returns
+    -------
+    PatternRecognizer
+        The address recognizer.
+    """
+    return PatternRecognizer(supported_entity=ADDRESS, name='UsAddressRecognizer',
+                             patterns=[Pattern(name, regex, score) for name, regex, score in ADDRESS_PATTERNS],
+                             global_regex_flags=ADDRESS_REGEX_FLAGS)
+
+
+def create_url_recognizer() -> PatternRecognizer:
+    """
+    Creates the pattern recognizer for URLs, in place of Presidio's.
+
+    Presidio's matches any word, full stop and top-level domain, and many short words are TLDs, so OCR'd text that
+    lost the space after a full stop ("lethargic.do not") was scrubbed as a URL. This one needs a scheme, www. or a
+    common TLD (see pii_patterns.BARE_DOMAIN_TLDS).
+
+    Returns
+    -------
+    PatternRecognizer
+        The URL recognizer.
+    """
+    return PatternRecognizer(supported_entity='URL', name='StrictUrlRecognizer',
+                             patterns=[Pattern(name, regex, score) for name, regex, score in URL_PATTERNS],
+                             global_regex_flags=URL_REGEX_FLAGS)
 
 
 def find_missing_model_folders(nlp_config_file: str) -> list[str]:
@@ -138,7 +198,8 @@ def create_nlp_engine(nlp_config_file: str) -> AnalyzerEngine:
 
     Sets up a Presidio AnalyzerEngine using the provided
     configuration file, which specifies the NLP engine and other settings,
-    and adds a pattern recognizer for GRLS subject IDs.
+    and adds pattern recognizers for GRLS subject IDs and addresses. Presidio's URL recognizer is replaced with a
+    stricter one.
 
     Parameters
     ----------
@@ -168,11 +229,196 @@ def create_nlp_engine(nlp_config_file: str) -> AnalyzerEngine:
         engine = provider.create_engine()
         analyzer = AnalyzerEngine(nlp_engine=engine)
         analyzer.registry.add_recognizer(create_subject_id_recognizer())
+        analyzer.registry.add_recognizer(create_address_recognizer())
+        analyzer.registry.remove_recognizer('UrlRecognizer')
+        analyzer.registry.add_recognizer(create_url_recognizer())
         return analyzer
 
     except Exception as e:
         stdout_logger.error(f'Error creating NLP engine: {e}')
         raise
+
+
+def is_kept(result: RecognizerResult, text: str) -> bool:
+    """
+    Checks whether a detection is left in the text: a type in KEEP_TYPES, or a name that is only initials, such as a
+    staff column's.
+
+    Parameters
+    ----------
+    result : RecognizerResult
+        The detection.
+    text : str
+        The text it was found in.
+
+    Returns
+    -------
+    bool
+        Whether it's kept.
+    """
+    if result.entity_type in KEEP_TYPES:
+        return True
+    return result.entity_type == 'PERSON' and is_initials(text[result.start:result.end])
+
+
+class SpanIndex:
+    """
+    Answers whether a span overlaps, or lies inside, any of a set of detections' spans, in O(log n) per question.
+
+    Examples
+    --------
+    >>> index = SpanIndex([RecognizerResult('PERSON', 5, 10, 1.0), RecognizerResult('ID', 20, 30, 1.0)])
+    >>> index.overlaps(9, 12), index.overlaps(10, 20), index.contains(22, 30), index.contains(8, 12)
+    (True, False, True, False)
+    """
+
+    def __init__(self, results: list[RecognizerResult]):
+        spans = sorted((result.start, result.end) for result in results)
+        self.starts = [start for start, _ in spans]
+        # The furthest end of any span starting at or before each position in starts.
+        self.max_ends = list(accumulate((end for _, end in spans), max))
+
+    def overlaps(self, start: int, end: int) -> bool:
+        """
+        Whether any span shares at least one character with start:end.
+        """
+        index = bisect_left(self.starts, end)
+        return index > 0 and self.max_ends[index - 1] > start
+
+    def contains(self, start: int, end: int) -> bool:
+        """
+        Whether any span covers all of start:end.
+        """
+        index = bisect_right(self.starts, start)
+        return index > 0 and self.max_ends[index - 1] >= end
+
+
+def is_inside_kept_date(result: RecognizerResult, text: str, kept_dates: SpanIndex) -> bool:
+    """
+    Checks whether a detection is only part of a date that is kept, such as "June" read as a name in "June 3, 2023",
+    or "03-14-23" read as a phone number, so it's kept with the date rather than cutting it apart. Only a detection
+    made of a date's words and numbers counts (see `is_date_part`), so a phone number, email, address, subject ID or
+    name the model took for part of a date is still scrubbed.
+
+    Parameters
+    ----------
+    result : RecognizerResult
+        The detection.
+    text : str
+        The whole text.
+    kept_dates : SpanIndex
+        The kept dates.
+
+    Returns
+    -------
+    bool
+        Whether it's kept as part of a date.
+    """
+    return kept_dates.contains(result.start, result.end) and is_date_part(text[result.start:result.end])
+
+
+def left_in_flags(results: list[RecognizerResult], text: str) -> list[bool]:
+    """
+    Works out which detections are left in the text: those is_kept keeps, and those that are only part of a kept
+    date (see is_inside_kept_date). scrub_pii and the confidence report both use this, so they agree.
+
+    Parameters
+    ----------
+    results : list[RecognizerResult]
+        The detections.
+    text : str
+        The whole text.
+
+    Returns
+    -------
+    list[bool]
+        Whether each detection is left in.
+    """
+    kept = [is_kept(result, text) for result in results]
+    kept_dates = SpanIndex([result for result, is_result_kept in zip(results, kept)
+                            if is_result_kept and result.entity_type in KEEP_TYPES])
+    return [is_result_kept or is_inside_kept_date(result, text, kept_dates)
+            for result, is_result_kept in zip(results, kept)]
+
+
+def stretch_addresses(results: list[RecognizerResult], text: str, kept_dates: SpanIndex) -> list[RecognizerResult]:
+    """
+    Stretches each address, and each place the model found, over the address parts right next to it (see
+    `address_around`), such as a house number and suite around a street the model only found the name of, or a ZIP
+    code after a city. A stretched place becomes an address. A kept date is never stretched over.
+
+    Parameters
+    ----------
+    results : list[RecognizerResult]
+        The detections to replace.
+    text : str
+        The whole text.
+    kept_dates : SpanIndex
+        The kept dates.
+
+    Returns
+    -------
+    list[RecognizerResult]
+        The detections, with addresses and places stretched.
+    """
+    stretched = []
+    for result in results:
+        if result.entity_type in (ADDRESS, 'LOCATION'):
+            start, end = address_around(text, result.start, result.end,
+                                        name_may_start_before=result.entity_type != ADDRESS)
+            if start < result.start and kept_dates.overlaps(start, result.start):
+                start = result.start
+            if end > result.end and kept_dates.overlaps(result.end, end):
+                end = result.end
+            if (start, end) != (result.start, result.end):
+                result = RecognizerResult(ADDRESS, start, end, result.score,
+                                          analysis_explanation=result.analysis_explanation,
+                                          recognition_metadata=result.recognition_metadata)
+        stretched.append(result)
+    return stretched
+
+
+def merge_into_addresses(results: list[RecognizerResult]) -> list[RecognizerResult]:
+    """
+    Merges every detection that overlaps an address into it, so the whole address is replaced as one.
+
+    Overlapping detections are grouped (a detection overlapping one that overlaps an address is merged too). A group
+    with an address becomes that address, stretched to cover the group; other groups are left as they are.
+
+    Parameters
+    ----------
+    results : list[RecognizerResult]
+        The detections to replace.
+
+    Returns
+    -------
+    list[RecognizerResult]
+        The detections, with those overlapping an address merged into it, ordered by where they start.
+    """
+    merged = []
+    group = []
+    group_end = -1
+
+    def close_group():
+        addresses = [result for result in group if result.entity_type == ADDRESS]
+        if not addresses:
+            merged.extend(group)
+            return
+        address = max(addresses, key=lambda result: result.score)
+        address.start = min(result.start for result in group)
+        address.end = max(result.end for result in group)
+        merged.append(address)
+
+    for result in sorted(results, key=lambda result: (result.start, -result.end)):
+        if group and result.start < group_end:
+            group.append(result)
+            group_end = max(group_end, result.end)
+        else:
+            close_group()
+            group = [result]
+            group_end = result.end
+    close_group()
+    return merged
 
 
 def scrub_pii(text: str, analyzer: AnalyzerEngine, threshold: float,
@@ -184,6 +430,10 @@ def scrub_pii(text: str, analyzer: AnalyzerEngine, threshold: float,
     and the results are shifted to their place in the whole text, which is then anonymized at once. A piece never
     ends inside a subject ID. Another entity is only missed for being split if it runs across a piece's boundary,
     and a boundary only falls inside a line when max_length characters go by without a line break.
+
+    Detections that are kept (see `is_kept`), and any that are only part of a kept date (see
+    `is_inside_kept_date`), are left in the text. They're still returned, so they're listed in the confidence report. Addresses and places are stretched over the address parts
+    right next to them (see `stretch_addresses`), and detections overlapping an address are merged into it.
 
     Parameters
     ----------
@@ -199,7 +449,8 @@ def scrub_pii(text: str, analyzer: AnalyzerEngine, threshold: float,
     Returns
     -------
     tuple
-        A tuple containing the scrubbed text and the filtered results, with offsets in the whole text.
+        A tuple containing the scrubbed text and the filtered results (those replaced and those kept), ordered by
+        where they start, with offsets in the whole text.
     """
     results = []
     for offset, piece in split_text(text, max_length, keep_together=SUBJECT_ID_RE):
@@ -207,14 +458,40 @@ def scrub_pii(text: str, analyzer: AnalyzerEngine, threshold: float,
             result.start += offset
             result.end += offset
             results.append(result)
-    cleaned_results = [
-        result for result in results
-        if result.score >= threshold and result.entity_type not in EXCLUDE_TYPES
-    ]
+    cleaned_results = [result for result in results
+                       if result.score >= threshold and result.entity_type not in EXCLUDE_TYPES]
+    left_in = left_in_flags(cleaned_results, text)
+    kept = [result for result, is_left_in in zip(cleaned_results, left_in) if is_left_in]
+    kept_dates = SpanIndex([result for result in kept if result.entity_type in KEEP_TYPES])
+    to_replace = merge_into_addresses(stretch_addresses(
+        [result for result, is_left_in in zip(cleaned_results, left_in) if not is_left_in], text, kept_dates))
     anonymizer = AnonymizerEngine()
-    anonymized_results = anonymizer.anonymize(text=text, analyzer_results=cleaned_results,
+    anonymized_results = anonymizer.anonymize(text=text, analyzer_results=to_replace,
                                               operators=ANONYMIZE_OPERATORS)
-    return anonymized_results.text, cleaned_results
+    return anonymized_results.text, sorted(to_replace + kept, key=lambda result: (result.start, result.end))
+
+
+def scrubbed_flags(results: list[RecognizerResult], text: str) -> list[bool]:
+    """
+    Works out which of scrub_pii's results had their text replaced: every one that isn't left in (see
+    `left_in_flags`), and one left in (such as a date) whose text overlaps one that was replaced.
+
+    Parameters
+    ----------
+    results : list[RecognizerResult]
+        The results scrub_pii returned.
+    text : str
+        The text they were found in.
+
+    Returns
+    -------
+    list[bool]
+        Whether each result's text was replaced, at least in part.
+    """
+    left_in = left_in_flags(results, text)
+    replaced = SpanIndex([result for result, is_left_in in zip(results, left_in) if not is_left_in])
+    return [not is_left_in or replaced.overlaps(result.start, result.end)
+            for result, is_left_in in zip(results, left_in)]
 
 
 def write_confidence_record(filename: str, filtered_results: list, original_text: str) -> None:
@@ -237,8 +514,11 @@ def write_confidence_record(filename: str, filtered_results: list, original_text
                 'Type': result.entity_type,
                 'Start': result.start,
                 'End': result.end,
-                'Score': float(result.score)
-            } for result in filtered_results
+                'Score': float(result.score),
+                # Whether it was replaced in the scrubbed text. Kept results, such as dates and initials, are left
+                # in, unless they overlap one that was replaced.
+                'Scrubbed': scrubbed,
+            } for result, scrubbed in zip(filtered_results, scrubbed_flags(filtered_results, original_text))
         ]
         with open(filename, 'w') as jsonfile:
             json.dump(results_list, jsonfile, indent=2)
