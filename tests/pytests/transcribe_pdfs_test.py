@@ -573,3 +573,72 @@ def test_main_exits_with_1_when_ocr_is_not_set_up(monkeypatch, tmp_path, engine)
     monkeypatch.setattr(transcribe_pdfs, 'check_ocr_setup', missing_poppler)
     assert _main(monkeypatch, tmp_path) == 1
     assert {status for status, _ in _statuses(engine).values()} == {None}
+
+
+@pytest.mark.parametrize('mode, results', [
+    ('page', [
+        {'content': 'Page one', 'confidence': 91.0, 'page': 1, 'block': 0},
+        {'content': 'Page two', 'confidence': 92.0, 'page': 2, 'block': 0},
+    ]),
+    ('block', [
+        {'content': 'P1 block 1', 'confidence': 81.0, 'page': 1, 'block': 1},
+        {'content': 'P1 block 2', 'confidence': 82.0, 'page': 1, 'block': 2},
+        {'content': 'P1 block 3', 'confidence': 83.0, 'page': 1, 'block': 3},
+        {'content': 'P2 block 1', 'confidence': 84.0, 'page': 2, 'block': 1},
+        {'content': 'P2 block 2', 'confidence': 85.0, 'page': 2, 'block': 2},
+        {'content': 'P2 block 3', 'confidence': 86.0, 'page': 2, 'block': 3},
+    ]),
+])
+@pytest.mark.parametrize('has_existing_empty_row', [False, True])
+def test_every_ocr_result_has_its_own_database_row(monkeypatch, tmp_path, mode, results, has_existing_empty_row):
+    """
+    Test that in page and block mode each OCR result is saved as its own output row (#49).
+
+    Parameters:
+        mode : str
+            The document type, page or block.
+        results : list of dict
+            The OCR results the faked operation returns.
+        has_existing_empty_row : bool
+            Whether the input already has an empty output row, which the first result should fill.
+
+    Asserts:
+        There is one row per result, each pointing to its own file with that result's text and confidence, an
+        existing empty row is reused, and the input is saved as transcribed successfully.
+    """
+    engine = _shard_database(monkeypatch, tmp_path, mode, 1)
+    old_row_id = None
+    with Session(engine) as session:
+        input_row = session.query(TranscriptionInput).one()
+        if has_existing_empty_row:
+            old_row = TranscriptionOutput(transcription_input=input_row)
+            session.add(old_row)
+            session.commit()
+            old_row_id = old_row.id
+        input_id, input_file = input_row.id, input_row.input_file
+
+    def fake_process_row(self, input_path):
+        assert input_path == input_file
+        return results
+
+    operation = transcribe_pdfs.TesseractOperationPage if mode == 'page' else transcribe_pdfs.TesseractOperationBlock
+    monkeypatch.setattr(operation, 'process_row', fake_process_row)
+    _run(tmp_path, document_type=mode)
+
+    assert _statuses(engine) == {input_file: ('success', None)}
+    with Session(engine) as session:
+        stored_rows = session.query(TranscriptionOutput).order_by(TranscriptionOutput.id).all()
+        assert len(stored_rows) == len(results)
+        assert len({row.ocr_output_file for row in stored_rows}) == len(results)
+        assert {row.ocr_confidence for row in stored_rows} == {result['confidence'] for result in results}
+        assert all(row.transcription_input.input_file == input_file for row in stored_rows)
+        if has_existing_empty_row:
+            assert old_row_id in {row.id for row in stored_rows}
+
+        by_file = {row.ocr_output_file: row for row in stored_rows}
+        for result in results:
+            file_path = tmp_path.joinpath('unstructured_text', mode,
+                                          f"{input_id}-1-{result['page']}-{result['block']}.txt")
+            assert str(file_path) in by_file
+            assert by_file[str(file_path)].ocr_confidence == result['confidence']
+            assert file_path.read_text() == result['content']
