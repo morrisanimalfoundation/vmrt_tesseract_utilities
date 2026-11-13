@@ -13,7 +13,9 @@ from presidio_anonymizer.entities import OperatorConfig
 from sqlalchemy import inspect
 from sqlalchemy.pool import NullPool
 
-from vmrt_tesseract_utilities.cli import normalize_flag_spelling
+from vmrt_tesseract_utilities.cli import (add_max_failure_rate_argument,
+                                          normalize_flag_spelling,
+                                          run_exit_code)
 from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                TranscriptionOutput,
                                                get_database_session)
@@ -454,7 +456,7 @@ def get_files_to_process(args: argparse.Namespace, failed_ids: frozenset = froze
     return results
 
 
-def scrub_chunks(args: argparse.Namespace, analyzer: AnalyzerEngine) -> list[tuple[str, str]]:
+def scrub_chunks(args: argparse.Namespace, analyzer: AnalyzerEngine) -> tuple[int, list[tuple[str, str]]]:
     """
     Scrubs one chunk of files, or with --until-done, keeps scrubbing chunks until no files are left.
 
@@ -469,8 +471,8 @@ def scrub_chunks(args: argparse.Namespace, analyzer: AnalyzerEngine) -> list[tup
 
     Returns
     -------
-    list[tuple[str, str]]
-        (input file, error) for each file that failed.
+    tuple[int, list[tuple[str, str]]]
+        The number of files tried, and (input file, error) for each file that failed.
     """
     failures = []
     failed_ids = set()
@@ -487,7 +489,7 @@ def scrub_chunks(args: argparse.Namespace, analyzer: AnalyzerEngine) -> list[tup
     log_run_summary('Scrubbed', count, failures,
                     note=' and were skipped (see pii_scrubber_error in transcription_output); pass --retry-failed '
                          'to try them again')
-    return failures
+    return count, failures
 
 
 def check_status_columns(args: argparse.Namespace) -> None:
@@ -547,6 +549,7 @@ def parse_args() -> argparse.Namespace:
                         help='Keep scrubbing chunks until no files are left, instead of stopping after one.')
     parser.add_argument('--retry-failed', action='store_true',
                         help='Also scrub files that failed on an earlier run.')
+    add_max_failure_rate_argument(parser)
     args = parser.parse_args(normalize_flag_spelling(sys.argv[1:]))
     # The offset would be applied to every chunk, so the run would stop with that many files still unscrubbed.
     if args.until_done and args.offset:
@@ -554,12 +557,29 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-if __name__ == '__main__':
+def main() -> int:
+    """
+    Scrubs the files, and works out the run's exit code.
+
+    A file that fails doesn't stop the run, so the exit code is how anything checking it (scrub_txt_files.sh,
+    Jenkins) finds out that every file, or more than --max-failure-rate of them, failed.
+
+    Returns
+    -------
+    int
+        0 if the run succeeded, 1 if it stopped before scrubbing anything, or EXIT_TOO_MANY_FAILURES if too many
+        files failed.
+    """
     args = parse_args()
     try:
         check_status_columns(args)
     except RuntimeError as e:
         stdout_logger.error(f'Stopping before scrubbing anything: {e}')
-        sys.exit(1)
+        return 1
     nlp_engine = create_nlp_engine(args.config)
-    scrub_chunks(args, nlp_engine)
+    count, failures = scrub_chunks(args, nlp_engine)
+    return run_exit_code(count, len(failures), args.max_failure_rate)
+
+
+if __name__ == '__main__':
+    sys.exit(main())

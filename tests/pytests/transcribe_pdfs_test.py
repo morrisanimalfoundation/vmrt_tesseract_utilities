@@ -7,6 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from scripts import transcribe_pdfs
+from vmrt_tesseract_utilities.cli import EXIT_TOO_MANY_FAILURES
 from vmrt_tesseract_utilities.database import (Base, TranscriptionInput,
                                                TranscriptionOutput)
 from vmrt_tesseract_utilities.tesseract_operations import (NoTextFoundError,
@@ -47,7 +48,7 @@ def _fake_process_row(self, input_path):
 def _run(tmp_path, retry_failed=False, shard=None, document_type='document', offset=0):
     args = argparse.Namespace(output_to=str(tmp_path), document_type=document_type, chunk_size=10,
                               offset=offset, retry_failed=retry_failed, shard=shard, debug_sql=False)
-    transcribe_pdfs.run_tesseract(args)
+    return transcribe_pdfs.run_tesseract(args)
 
 
 def _statuses(engine) -> dict:
@@ -470,6 +471,108 @@ def test_offset_counts_within_the_shard(monkeypatch, tmp_path):
     monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', _recorder(seen))
     _run(tmp_path, shard=(0, 2), offset=1)
     assert sorted(seen) == ['4.pdf', '6.pdf']
+
+
+def _main(monkeypatch, tmp_path, *flags):
+    """
+    Runs the script's main(), as `transcribe_pdfs.py <output> <flags>`.
+    """
+    monkeypatch.setattr(sys, 'argv', ['transcribe_pdfs.py', str(tmp_path), *flags])
+    return transcribe_pdfs.main()
+
+
+def test_run_tesseract_returns_the_count_and_failures(monkeypatch, tmp_path, engine):
+    """
+    Test that the run returns how many files it tried and which failed, for working out its exit code.
+
+    Asserts:
+        All three files are counted, and the two that failed are returned with their errors.
+    """
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', _fake_process_row)
+    count, failures = _run(tmp_path)
+    assert count == 3
+    assert failures == [('blank.pdf', 'NoTextFoundError: No recognizable text found in blank.pdf.'),
+                        ('broken.pdf', 'ValueError: Unable to get page count.')]
+
+
+def test_main_exits_with_3_when_every_file_fails(monkeypatch, tmp_path, caplog, engine):
+    """
+    Test that a run where every PDF failed exits with 3, so it doesn't look successful.
+
+    Asserts:
+        The exit code is 3, and the log says every file failed.
+    """
+    def always_fails(self, input_path):
+        raise ValueError('Unable to get page count.')
+
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', always_fails)
+    with caplog.at_level(logging.INFO, logger='import_utility'):
+        assert _main(monkeypatch, tmp_path) == EXIT_TOO_MANY_FAILURES
+    assert 'Transcribed 0 of 3 files.' in caplog.text
+    assert 'All 3 files failed' in caplog.text
+
+
+def test_main_exits_with_0_when_some_files_fail(monkeypatch, tmp_path, engine):
+    """
+    Test that a run where only some PDFs failed still exits with 0 by default.
+
+    Asserts:
+        Two of three files fail and the exit code is 0.
+    """
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', _fake_process_row)
+    assert _main(monkeypatch, tmp_path) == 0
+    assert _statuses(engine)['broken.pdf'][0] == 'failed'
+
+
+def test_main_exits_with_3_when_more_than_max_failure_rate_fail(monkeypatch, tmp_path, engine):
+    """
+    Test that with --max-failure-rate, a run where a larger share of PDFs failed exits with 3.
+
+    Asserts:
+        Two of three files failing is more than 0.5, so the exit code is 3.
+    """
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', _fake_process_row)
+    assert _main(monkeypatch, tmp_path, '--max-failure-rate', '0.5') == EXIT_TOO_MANY_FAILURES
+
+
+def test_main_exits_with_0_when_every_file_is_transcribed(monkeypatch, tmp_path, engine):
+    """
+    Test that a run where every PDF was transcribed exits with 0.
+
+    Asserts:
+        Every file is saved as a success and the exit code is 0.
+    """
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row',
+                        lambda self, path: [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1}])
+    assert _main(monkeypatch, tmp_path) == 0
+    assert {status for status, _ in _statuses(engine).values()} == {'success'}
+
+
+def test_main_exits_with_0_when_there_are_no_files(monkeypatch, tmp_path, caplog, engine):
+    """
+    Test that a run with no PDFs to transcribe exits with 0.
+
+    Asserts:
+        No block-mode files are queued, so nothing is found and the exit code is 0.
+    """
+    with caplog.at_level(logging.INFO, logger='import_utility'):
+        assert _main(monkeypatch, tmp_path, '--document-type', 'block') == 0
+    assert 'Found 0 files to transcribe.' in caplog.text
+
+
+def test_main_exits_with_1_when_ocr_is_not_set_up(monkeypatch, tmp_path, engine):
+    """
+    Test that a run that stops before transcribing anything, because the OCR tools aren't usable, exits with 1.
+
+    Asserts:
+        The exit code is 1, and no file is marked as failed.
+    """
+    def missing_poppler():
+        raise OcrSetupError('Poppler is not installed or not on PATH (missing pdfinfo).')
+
+    monkeypatch.setattr(transcribe_pdfs, 'check_ocr_setup', missing_poppler)
+    assert _main(monkeypatch, tmp_path) == 1
+    assert {status for status, _ in _statuses(engine).values()} == {None}
 
 
 @pytest.mark.parametrize('mode, results', [
