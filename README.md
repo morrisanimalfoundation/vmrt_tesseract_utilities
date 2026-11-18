@@ -215,8 +215,8 @@ What it keeps and removes, beyond what the model finds on its own:
   after a comma are often medical ones (`Rabies, SC`), and `ID` only counts as Idaho after a city and a comma
   (`Boise, ID 83702`), so `Patient ID 12345` is kept. Street types count anywhere (`Street`, `Lane`, `Ave`,
   `Rd`, `Blvd`), except the abbreviations that are also medical ones (`St`, `Ln`, `Dr`, `Ct`, `Sq`, `Pl`), which
-  only count when the address clearly goes on after them (a direction, suite, city, state and ZIP, or phone
-  number), or at the end of a line or before a comma when written in the same case as the street's name and
+  only count when the address clearly goes on after them (a direction, suite, phone number, or a city, state
+  and ZIP on the same line), or at the end of a line or before a comma when written in the same case as the street's name and
   after a house number of two or more digits (`22 Willow Ct`, `22 WILLOW CT`). A number followed by a unit
   (`1 ML`, `2 Cm`, `1 Yr`, `1 Tab`) is never a house number, and times and what a CT scan is of are never a
   street's name, so `4 Weeks Dr Smith`, `Dr N. Patel`, `1 Abdominal CT scan`, `Performed 1 Abdominal CT`,

@@ -79,12 +79,14 @@ _CAPS_STREET_TYPE = '(?:' + '|'.join(a.upper() for a in _STREET_TYPE_ABBREVIATIO
 _PHONE = r'\(?[0-9]{3}\)?[ \t.-]?[0-9]{3}[ \t.-]?[0-9]{4}(?![0-9])'
 
 # Where an address clearly goes on after an abbreviated street type: a direction that ends the street, a unit, the
-# city, state and ZIP (after a space, comma or line break), or a phone number, as in a letterhead. A direction must
+# city, state and ZIP (after a space, comma or line break, or a few more words on the same line, such as a longer
+# city's name), or a phone number, as in a letterhead. A direction must
 # end the street, so a doctor's initial ("Dr N. Patel") or "W/" for "with" ("CT W/CONTRAST") isn't one.
 _LINE_OR_CLAUSE_END = r'(?=[ \t]*(?:[,;]|$))'
 _BEFORE_REST = r'(?:[ \t]*,[ \t]*|[ \t]*\r?\n[ \t]*|[ \t]+)'
 _CLEAR_ADDRESS_AFTER = (rf'(?=[ \t]+{_DIRECTION}(?:{_LINE_OR_CLAUSE_END}|[ \t]+(?:{_UNIT_WORD}|{CITY_STATE_ZIP_REGEX}))'
-                        rf'|{_BEFORE_REST}(?:{_UNIT_WORD}|{CITY_STATE_ZIP_REGEX})|[ \t]+{_PHONE})')
+                        rf'|{_BEFORE_REST}(?:{_UNIT_WORD}|{CITY_STATE_ZIP_REGEX})'
+                        rf'|[ \t,]+(?:{_STREET_WORD}[ \t,]+){{1,3}}{CITY_STATE_ZIP_REGEX}|[ \t]+{_PHONE})')
 
 # A word that is never part of a street's name before an abbreviated street type: a time ("Recheck 2 Weeks Dr") or
 # what a CT scan is of ("1 Abdominal CT").

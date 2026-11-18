@@ -35,6 +35,9 @@ from vmrt_tesseract_utilities.pii_patterns import (address_around,
     ('1428 Maple Grove Ct (541) 555-0134', ['1428 Maple Grove Ct']),  # A letterhead's phone number after it.
     # Other abbreviated street types, where the address goes on or ends.
     ('7 Old Mill Rd, Bend OR 97701', ['7 Old Mill Rd, Bend OR 97701']),
+    # A city, state and ZIP a few words further on the same line.
+    ('12345 N. Elm St. Two Rivers Bend, OR 97701', ['12345 N. Elm St. Two Rivers Bend, OR 97701']),
+    ('5 Elm St Cedar Ridge Clinic Bend OR 97701', ['5 Elm St', 'Ridge Clinic Bend OR 97701']),
     ('5 Elm St\nBend, OR 97701', ['5 Elm St\nBend, OR 97701']),
     ('Moved to 14 Elm St.\n', ['14 Elm St.']),
     ('14 Larkspur Ln, Bend', ['14 Larkspur Ln']),
