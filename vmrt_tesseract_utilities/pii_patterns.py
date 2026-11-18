@@ -60,53 +60,73 @@ _UNIT = rf'(?:,?[ \t]*{_UNIT_WORD}[ \t]*#?[A-Z0-9-]+\b)?'
 
 _DIRECTION = r'[NSEW]{1,2}\b\.?'
 
-# Street types, in any case but starting with a capital, so "dr" in a sentence isn't one.
-_STREET_TYPE = (r'(?=[A-Z])(?i:street|st|avenue|ave|road|rd|boulevard|blvd|lane|ln|drive|court|circle|cir|way|'
-                r'place|pl|parkway|pkwy|terrace|ter|trail|trl|loop|pike|square|sq|plaza|plz)\b\.?')
+# Street types written out, in any case but starting with a capital, so "lane" in a sentence isn't one.
+_STREET_TYPE_WORDS = ('street', 'avenue', 'road', 'boulevard', 'lane', 'drive', 'court', 'circle', 'way', 'place',
+                      'parkway', 'terrace', 'trail', 'loop', 'pike', 'square', 'plaza')
+_STREET_TYPE = r'(?=[A-Z])(?i:' + '|'.join(_STREET_TYPE_WORDS) + r')\b\.?'
+
+# Abbreviated street types. Many are also medical abbreviations or something else ("Dr Smith", "1 Abdominal CT",
+# "1 ML SQ", "Popliteal LN", "2 Mm ST Elevation"), so they only count where the address clearly goes on after them,
+# or where they end a line or clause (see _street_name_then_type).
+_STREET_TYPE_ABBREVIATIONS = ('st', 'ave', 'rd', 'blvd', 'ln', 'dr', 'ct', 'cir', 'pl', 'pkwy', 'ter', 'trl', 'sq',
+                              'plz')
+_ABBREVIATED_STREET_TYPE = r'(?=[A-Z])(?i:' + '|'.join(_STREET_TYPE_ABBREVIATIONS) + r')\b\.?'
+_TITLE_CASE_STREET_TYPE = '(?:' + '|'.join(a.capitalize() for a in _STREET_TYPE_ABBREVIATIONS) + r')\b\.?'
+_CAPS_STREET_TYPE = '(?:' + '|'.join(a.upper() for a in _STREET_TYPE_ABBREVIATIONS) + r')\b\.?'
 
 # A US phone number, such as "(541) 555-0134" or "541.555.0134".
 _PHONE = r'\(?[0-9]{3}\)?[ \t.-]?[0-9]{3}[ \t.-]?[0-9]{4}(?![0-9])'
 
-# "Dr" and "Ct" are usually Doctor and a CT scan ("Recheck 4 Weeks Dr Smith", "1 Abdominal CT scan"), so they only
-# count as street types where the address clearly goes on: before a direction that ends the street, a unit, the
-# city, state and ZIP, or a phone number, as in a letterhead. A direction must end the street, so a doctor's initial
-# ("Dr N. Patel") or "W/" for "with" ("CT W/CONTRAST") isn't one.
-_AMBIGUOUS_STREET_TYPE = r'(?=[A-Z])(?i:dr|ct)\b\.?'
+# Where an address clearly goes on after an abbreviated street type: a direction that ends the street, a unit, the
+# city, state and ZIP (after a space, comma or line break), or a phone number, as in a letterhead. A direction must
+# end the street, so a doctor's initial ("Dr N. Patel") or "W/" for "with" ("CT W/CONTRAST") isn't one.
 _LINE_OR_CLAUSE_END = r'(?=[ \t]*(?:[,;]|$))'
+_BEFORE_REST = r'(?:[ \t]*,[ \t]*|[ \t]*\r?\n[ \t]*|[ \t]+)'
 _CLEAR_ADDRESS_AFTER = (rf'(?=[ \t]+{_DIRECTION}(?:{_LINE_OR_CLAUSE_END}|[ \t]+(?:{_UNIT_WORD}|{CITY_STATE_ZIP_REGEX}))'
-                        rf'|[ \t]+(?:{_UNIT_WORD}|{CITY_STATE_ZIP_REGEX}|{_PHONE}))')
+                        rf'|{_BEFORE_REST}(?:{_UNIT_WORD}|{CITY_STATE_ZIP_REGEX})|[ \t]+{_PHONE})')
 
-# A word that is never part of a street's name before "Dr" or "Ct": a time ("Recheck 2 Weeks Dr") or what a CT scan
-# is of ("1 Abdominal CT").
+# A word that is never part of a street's name before an abbreviated street type: a time ("Recheck 2 Weeks Dr") or
+# what a CT scan is of ("1 Abdominal CT").
 _NOT_STREET_NAME = (r'(?i:days?|wks?|weeks?|mos?|months?|yrs?|years?|hrs?|hours?|abdominal|abdomen|thoracic|thorax|'
                     r'chest|head|skull|brain|spinal|spine|pelvic|pelvis|nasal|sinus|contrast)\b')
 _AMBIGUOUS_NAME_WORD = rf'(?!{_NOT_STREET_NAME}){_STREET_WORD}'
 _CAPS_NAME_WORD = rf"(?!{_NOT_STREET_NAME})[A-Z0-9][A-Z0-9'.-]*(?![a-z])"
 
+# A unit of measure or time right after a number, which makes it a dose, size or time rather than a house number
+# ("1 ML SQ", "2 Cm LN", "1 Yr Vaccine SQ", "1 Tab PO Way").
+_MEASURE = (r'(?i:mls?|mg|mcg|ug|cc|cm|mm|kgs?|lbs?|gm|oz|tabs?|tablets?|caps?|capsules?|units?|iu|drops?|gtts?|'
+            r'doses?|days?|wks?|weeks?|mos?|months?|yrs?|years?|hrs?|hours?|mins?|minutes?)\b')
 
-def _street_name_then_type(name_of) -> str:
+
+def _street_name_then_type(name_of, at_line_end: bool = True) -> str:
     """
     The regex for a street's name followed by its type, where name_of(word) is the regex for the name made of words.
 
-    At the end of a line or before a comma, "Dr" and "Ct" also count, but only written in the same case as the name
-    ("22 Willow Ct", "22 WILLOW CT"), since a capitalized "CT" after an ordinary word ("Performed 1 Abdominal CT") is
-    a scan.
+    A written-out type counts anywhere. An abbreviated one counts where the address clearly goes on after it, and,
+    if at_line_end, also at the end of a line or before a comma or semicolon, but only written in the same case as
+    the name ("22 Willow Ct", "22 WILLOW CT"), since a capitalized abbreviation after an ordinary word ("Performed 1
+    Abdominal CT", "1 Enlarged Popliteal LN") is a medical one.
     """
+    line_end = (rf'|{name_of(_AMBIGUOUS_NAME_WORD)}{_TITLE_CASE_STREET_TYPE}{_LINE_OR_CLAUSE_END}'
+                rf'|{name_of(_CAPS_NAME_WORD)}{_CAPS_STREET_TYPE}{_LINE_OR_CLAUSE_END}') if at_line_end else ''
     return (rf'(?:{name_of(_STREET_WORD)}{_STREET_TYPE}'
-            rf'|{name_of(_AMBIGUOUS_NAME_WORD)}(?:{_AMBIGUOUS_STREET_TYPE}{_CLEAR_ADDRESS_AFTER}'
-            rf'|(?:Dr|Ct)\b\.?{_LINE_OR_CLAUSE_END})'
-            rf'|{name_of(_CAPS_NAME_WORD)}(?:DR|CT)\b\.?{_LINE_OR_CLAUSE_END})')
+            rf'|{name_of(_AMBIGUOUS_NAME_WORD)}{_ABBREVIATED_STREET_TYPE}{_CLEAR_ADDRESS_AFTER}'
+            rf'{line_end})')
 
 
 # Roads named by number, such as "Hwy 97" or "Route 9A".
 _NUMBERED_ROAD = r'(?=[A-Z])(?i:highway|hwy|route|rte)\b\.?[ \t]+[0-9]{1,4}[A-Z]?\b'
 
 # "1428 Larkspur Lane", "220 W. Harbor Blvd Suite 4", "500 Main St NE" or "61450 Hwy 97". A street type needs at
-# least one word of name before it, so "2 Dr. Smith" isn't an address.
-_STREET_NAME_AND_TYPE = _street_name_then_type(lambda word: rf'(?:{word}[ \t]+){{1,4}}')
-STREET_ADDRESS_REGEX = (rf'{_HOUSE_NUMBER}[ \t]+'
+# least one word of name before it, so "2 Dr. Smith" isn't an address. An abbreviated street type ending a line
+# needs a house number of two or more digits, since a single digit there is more often a count ("1 ENLARGED
+# POPLITEAL LN").
+_STREET_NAME_AND_TYPE = _street_name_then_type(lambda word: rf'(?:{word}[ \t]+){{1,4}}', at_line_end=False)
+_STREET_NAME_AND_TYPE_AT_LINE_END = _street_name_then_type(lambda word: rf'(?:{word}[ \t]+){{1,4}}')
+STREET_ADDRESS_REGEX = (rf'(?:{_HOUSE_NUMBER}[ \t]+(?!{_MEASURE})'
                         rf'(?:{_STREET_NAME_AND_TYPE}(?:[ \t]+{_DIRECTION})?'
                         rf'|(?:{_STREET_WORD}[ \t]+){{0,3}}{_NUMBERED_ROAD})'
+                        rf'|(?=[0-9]{{2}}){_HOUSE_NUMBER}[ \t]+(?!{_MEASURE}){_STREET_NAME_AND_TYPE_AT_LINE_END})'
                         rf'{_UNIT}')
 
 PO_BOX_REGEX = r'\b(?i:p\.?[ \t]*o\.?[ \t]*box)[ \t]+[0-9]+\b'
@@ -148,20 +168,29 @@ URL_REGEX_FLAGS = re.IGNORECASE | re.MULTILINE
 _URL_TAIL = r'''(?:[/?#][^\s<>"']*)?'''
 _HOST_LABEL = r'[a-z0-9](?:[a-z0-9-]*[a-z0-9])?'
 
-# Top-level domains a bare domain (with no scheme or www.) must end in to count as a URL: common ones, and ones a
-# clinic is likely to use. Many short words are also TLDs (.do, .no, .today), so OCR'd text that loses the space
-# after a full stop ("lethargic.do not") would otherwise read as a URL. The TLD must be in lowercase or capitals,
-# since one in title case ("wks.Net weight") is more likely a missing space before a new sentence.
-BARE_DOMAIN_TLDS = ('com', 'net', 'org', 'edu', 'gov', 'us', 'co', 'info', 'biz',
-                    'vet', 'pet', 'dog', 'clinic', 'hospital', 'health', 'care')
+# Top-level domains a bare domain (with no scheme or www.) must end in to count as a URL. Many short words are also
+# TLDs (.do, .no, .today), so OCR'd text that loses the space after a full stop ("lethargic.do not") would otherwise
+# read as a URL. The TLD must be in lowercase or capitals, since one in title case ("wks.Net weight") is more likely
+# a missing space before a new sentence.
+BARE_DOMAIN_TLDS = ('com', 'net', 'org', 'edu', 'gov', 'info', 'biz')
 
-_BARE_TLD = '(?-i:' + '|'.join(BARE_DOMAIN_TLDS + tuple(tld.upper() for tld in BARE_DOMAIN_TLDS)) + ')'
+# Top-level domains that are also ordinary words in a vet record ("VOMITING.DOG", "HOME.CARE", "MOUTH.US"). A bare
+# domain ending in one only counts as a URL with a path after it ("cedarridge.vet/contact").
+WORD_TLDS = ('us', 'co', 'vet', 'pet', 'dog', 'clinic', 'hospital', 'health', 'care')
+
+
+def _tld(tlds: tuple[str, ...]) -> str:
+    return '(?-i:' + '|'.join(tlds + tuple(tld.upper() for tld in tlds)) + ')'
+
+
+_BARE_DOMAIN = rf'(?<![\w.@-]){_HOST_LABEL}(?:\.{_HOST_LABEL})*\.'
 
 # (name, regex, score) for each URL pattern.
 URL_PATTERNS = [
     ('URL with scheme', r'''\b(?:https?|ftp)://[^\s<>"']+''', 0.6),
     ('www URL', rf'\bwww[0-9]{{0,3}}\.{_HOST_LABEL}(?:\.{_HOST_LABEL})+{_URL_TAIL}', 0.6),
-    ('Bare domain', rf'(?<![\w.@-]){_HOST_LABEL}(?:\.{_HOST_LABEL})*\.{_BARE_TLD}\b(?![.-]?\w){_URL_TAIL}', 0.5),
+    ('Bare domain', rf'{_BARE_DOMAIN}{_tld(BARE_DOMAIN_TLDS)}\b(?![.-]?\w){_URL_TAIL}', 0.5),
+    ('Bare domain with a path', rf'''{_BARE_DOMAIN}{_tld(WORD_TLDS)}/[^\s<>"']*''', 0.5),
 ]
 
 # A name that is only initials: one or two capitals ("K", "JO") or up to three letters each with a full stop ("J.O.",
@@ -336,6 +365,36 @@ def is_initials(name: str) -> bool:
     [False, False, False, False, False, False, False]
     """
     return bool(_INITIALS_RE.fullmatch(name.strip()))
+
+
+# Month names that are also first names. A date the model found that is only one of these ("Spoke with April") may
+# be a name, and a date that's only a month name isn't one the visit date miner can use, so it's scrubbed.
+_NAME_LIKE_MONTH_RE = re.compile(r'(?:jan|april|may|june|august)\.?', re.IGNORECASE)
+
+
+def is_name_like_month(text: str) -> bool:
+    """
+    Checks whether a date the scrubber found is only a month name that is also a first name, so it's scrubbed
+    rather than kept.
+
+    Parameters
+    ----------
+    text : str
+        The date's text.
+
+    Returns
+    -------
+    bool
+        Whether it's only a month name that is also a first name.
+
+    Examples
+    --------
+    >>> [is_name_like_month(text) for text in ['April', ' JUNE ', 'May', 'Jan.']]
+    [True, True, True, True]
+    >>> [is_name_like_month(text) for text in ['April 3', 'March', 'Monday', 'June 2023', 'yesterday']]
+    [False, False, False, False, False]
+    """
+    return bool(_NAME_LIKE_MONTH_RE.fullmatch(text.strip()))
 
 
 def is_date_part(text: str) -> bool:

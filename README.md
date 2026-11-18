@@ -204,23 +204,32 @@ What it keeps and removes, beyond what the model finds on its own:
   number such as `2015 Oak St` isn't taken for one, even if the model read it as a date. Something found
   inside a date is kept with it only if it's just the date's words and numbers (`June` read as a name in
   `June 3, 2023`, or `03-14-23` read as a phone number); a real phone number, ID or name inside a date is still
-  scrubbed.
+  scrubbed, and so is a name inside a "date" with no number in it (`Owner: June`). A date that's only a month
+  name that is also a first name (`April`, `May`, `June`, `August`, `Jan`) is scrubbed too, since it may be a
+  person (`Spoke with April`), and on its own it's no use to step 5. A house number or ZIP code the model read as
+  a date is scrubbed with the address around it (`<2015 N Cedar Ridge>`).
 - **Addresses are removed whole.** US street addresses, PO boxes and "City, ST 12345" lines are replaced with
   one `<ADDRESS>`, along with anything else the model found overlapping them, so no street, state or ZIP code
-  is left behind. Without a ZIP code, only a state's full name counts (`Bend, Oregon`), since abbreviations
+  is left behind. Those other detections are still listed in the confidence report, marked
+  `"Merged into": "ADDRESS"`. Without a ZIP code, only a state's full name counts (`Bend, Oregon`), since abbreviations
   after a comma are often medical ones (`Rabies, SC`), and `ID` only counts as Idaho after a city and a comma
-  (`Boise, ID 83702`), so `Patient ID 12345` is kept. `Dr` and `Ct` only count as street types when the
-  address clearly goes on after them (a direction, suite, city, state and ZIP, or phone number), or at the end
-  of a line or before a comma when written in the same case as the street's name (`22 Willow Ct`,
-  `22 WILLOW CT`). Times and what a CT scan is of are never a street's name, so `4 Weeks Dr Smith`,
-  `Dr N. Patel`, `1 Abdominal CT scan`, `Performed 1 Abdominal CT` and `CT W/CONTRAST` are kept. When the model finds only part of an address, such as a street's or city's
+  (`Boise, ID 83702`), so `Patient ID 12345` is kept. Written-out street types (`Street`, `Lane`) count
+  anywhere, but abbreviated ones (`St`, `Ln`, `Dr`, `Ct`, `Sq` and so on) are often medical abbreviations, so
+  they only count when the address clearly goes on after them (a direction, suite, city, state and ZIP, or phone
+  number), or at the end of a line or before a comma when written in the same case as the street's name and
+  after a house number of two or more digits (`22 Willow Ct`, `22 WILLOW CT`). A number followed by a unit
+  (`1 ML`, `2 Cm`, `1 Yr`, `1 Tab`) is never a house number, and times and what a CT scan is of are never a
+  street's name, so `4 Weeks Dr Smith`, `Dr N. Patel`, `1 Abdominal CT scan`, `Performed 1 Abdominal CT`,
+  `CT W/CONTRAST`, `DAPP 1 ML SQ`, `1 Enlarged Popliteal LN` and `2 Mm ST Elevation` are kept. When the model
+  finds only part of an address, such as a street's or city's
   name, the address parts right next to it on the same line are scrubbed with it: a house number and direction
   before it, and the rest of the street, a suite or unit and a ZIP code after it (`1234 N <Cedar Ridge> STE 100`,
   `<Springfield> 97477`). A state left on its own after a city is kept, since it doesn't identify anyone.
-- **URLs need a scheme (`https://`), `www.`, or a common or clinic-type top-level domain** (such as `.com`,
-  `.org`, `.us`, `.vet`, `.pet` or `.clinic`; the list is `BARE_DOMAIN_TLDS` in
-  `vmrt_tesseract_utilities/pii_patterns.py`), so words OCR joined with a full stop, such as `lethargic.do`,
-  are kept.
+- **URLs need a scheme (`https://`), `www.`, or a common top-level domain** (`.com`, `.net`, `.org`, `.edu`,
+  `.gov`, `.info` or `.biz`; the list is `BARE_DOMAIN_TLDS` in `vmrt_tesseract_utilities/pii_patterns.py`), so
+  words OCR joined with a full stop, such as `lethargic.do`, are kept. Top-level domains that are also words in
+  a vet record (`.dog`, `.vet`, `.pet`, `.care`, `.us` and others in `WORD_TLDS`) only count with a path after
+  them (`cedarridge.vet/contact`), so `VOMITING.DOG` and `HOME.CARE` are kept.
 - **Initials are kept, names are removed.** A name that's only initials (`JO`, `J.O.`), such as a staff
   column's, is left in and listed in the report as not scrubbed. Three capitals in a row (`TOM`) and anything
   after a title (`MRS. COX`) count as names. One caveat: a two-letter name written in capitals (`AL`) looks

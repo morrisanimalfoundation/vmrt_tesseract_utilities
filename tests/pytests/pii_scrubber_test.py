@@ -103,14 +103,14 @@ MEDICAL_TEXT = [
 # Detections per entity type in RECORD, recorded with the package versions in requirements.txt and BASELINE_MODEL.
 # Updating the model's pin can change these. Low-scoring types that only fire on parts
 # of other entities (US_SSN and US_DRIVER_LICENSE on the subject ID) are left out because they are noise, not what
-# we rely on. The model's detections inside the clinic's address are merged into the ADDRESS.
+# we rely on. The model's detections inside the clinic's address are merged into the ADDRESS, and still counted.
 BASELINE_COUNTS = {
-    'PERSON': 5,
-    'PHONE_NUMBER': 4,
+    'PERSON': 6,
+    'PHONE_NUMBER': 5,
     'DATE_TIME': 2,
     'LOCATION': 1,
     'ADDRESS': 1,
-    'ID': 1,
+    'ID': 2,
     'EMAIL_ADDRESS': 1,
 }
 
@@ -161,7 +161,7 @@ def scrubbed(analyzer):
     Returns
     -------
     tuple
-        The scrubbed text and the list of Presidio results.
+        The scrubbed text and its detections.
     """
     return pii_scrubber.scrub_pii(RECORD, analyzer, threshold=0.0)
 
@@ -191,7 +191,7 @@ def test_dates_are_kept(scrubbed, date):
     """
     text, results = scrubbed
     assert date in text
-    assert date in [RECORD[result.start:result.end] for result in results if result.entity_type == 'DATE_TIME']
+    assert date in [RECORD[d.result.start:d.result.end] for d in results if d.result.entity_type == 'DATE_TIME']
 
 
 def test_confidence_report_lists_dates_for_the_visit_date_miner(scrubbed, tmp_path):
@@ -219,7 +219,7 @@ def test_detection_count_matches_baseline(scrubbed, entity_type, baseline):
     If a change is expected (for example after deliberately updating the model), update BASELINE_COUNTS.
     """
     _, results = scrubbed
-    count = Counter(result.entity_type for result in results)[entity_type]
+    count = Counter(d.result.entity_type for d in results)[entity_type]
     assert abs(count - baseline) <= allowed_difference(baseline), \
         f'Found {count} {entity_type} entities, expected {baseline} ± {allowed_difference(baseline)}'
 
@@ -230,7 +230,7 @@ def test_recognizer_still_finds_entities(scrubbed, recognizer):
     Test that each recognizer we rely on still contributes at least one detection.
     """
     _, results = scrubbed
-    found = {result.recognition_metadata['recognizer_name'] for result in results}
+    found = {d.result.recognition_metadata['recognizer_name'] for d in results}
     assert recognizer in found, f'{recognizer} found nothing; recognizers that did: {sorted(found)}'
 
 
@@ -275,15 +275,15 @@ def test_long_text_is_analyzed_in_pieces(analyzer):
     RECORD's, shifted by the copy's offset.
     """
     _, whole = pii_scrubber.scrub_pii(RECORD, analyzer, threshold=0.0)
-    expected = sorted((result.entity_type, result.start, result.end) for result in whole)
+    expected = sorted((d.result.entity_type, d.result.start, d.result.end) for d in whole)
 
     copies = 3
     text, results = pii_scrubber.scrub_pii(RECORD * copies, analyzer, threshold=0.0, max_length=len(RECORD))
 
     for copy in range(copies):
         offset = copy * len(RECORD)
-        found = sorted((result.entity_type, result.start - offset, result.end - offset) for result in results
-                       if offset <= result.start < offset + len(RECORD))
+        found = sorted((d.result.entity_type, d.result.start - offset, d.result.end - offset) for d in results
+                       if offset <= d.result.start < offset + len(RECORD))
         assert found == expected, f'copy {copy}'
     for identifier in IDENTIFIERS:
         assert identifier.lower() not in text.lower()
@@ -302,7 +302,7 @@ def test_subject_id_is_not_split_between_pieces(analyzer):
     scrubbed, results = pii_scrubber.scrub_pii(text, analyzer, threshold=0.5, max_length=max_length)
 
     start = text.index('094')
-    assert ('ID', start, start + len('094 012345')) in [(r.entity_type, r.start, r.end) for r in results]
+    assert ('ID', start, start + len('094 012345')) in [(d.result.entity_type, d.result.start, d.result.end) for d in results]
     assert '012345' not in scrubbed
 
 
@@ -364,6 +364,8 @@ def test_whole_clinic_address_is_scrubbed(analyzer, text, clinic, address):
     'Pt is lethargic.do not vaccinate today.\n',
     'Owner reports dog is quiet.today.\n',
     'Owner called. vomiting.no diarrhea\n',
+    'PT VOMITING.DOG WAS QUIET\n',
+    'Discussed home.care plan with owner.\n',
 ])
 def test_words_joined_by_a_full_stop_are_kept(analyzer, text):
     """
@@ -372,7 +374,7 @@ def test_words_joined_by_a_full_stop_are_kept(analyzer, text):
     scrubbed, results = pii_scrubber.scrub_pii(text, analyzer, threshold=0.0)
 
     assert scrubbed == text
-    assert 'URL' not in [result.entity_type for result in results]
+    assert 'URL' not in [d.result.entity_type for d in results]
 
 
 @pytest.mark.parametrize('url', [
@@ -435,9 +437,12 @@ def test_overlapping_detections_are_merged_into_an_address():
     phone = make_result('PHONE_NUMBER', 33, 40)  # Only overlaps the ID.
     separate = make_result('PERSON', 50, 55)
 
-    merged = pii_scrubber.merge_into_addresses([separate, zip_id, person, address, phone])
+    merged, merged_away = pii_scrubber.merge_into_addresses([separate, zip_id, person, address, phone])
 
     assert [(r.entity_type, r.start, r.end) for r in merged] == [('ADDRESS', 5, 40), ('PERSON', 50, 55)]
+    # Returned unchanged, so the report can still list them.
+    assert sorted((r.entity_type, r.start, r.end) for r in merged_away) == [('ID', 25, 35), ('PERSON', 5, 15),
+                                                                            ('PHONE_NUMBER', 33, 40)]
 
 
 def test_overlaps_without_an_address_are_left_alone():
@@ -446,10 +451,11 @@ def test_overlaps_without_an_address_are_left_alone():
     """
     results = [make_result('ORGANIZATION', 0, 20), make_result('URL', 0, 20), make_result('PERSON', 30, 40)]
 
-    merged = pii_scrubber.merge_into_addresses(results)
+    merged, merged_away = pii_scrubber.merge_into_addresses(results)
 
     assert [(r.entity_type, r.start, r.end) for r in merged] == [('ORGANIZATION', 0, 20), ('URL', 0, 20),
                                                                  ('PERSON', 30, 40)]
+    assert merged_away == []
 
 
 class StubAnalyzer:
@@ -530,6 +536,75 @@ def test_address_is_not_stretched_over_a_kept_date(tmp_path):
 
     assert scrubbed == 'Seen June 3 <ADDRESS>'
     assert report == {('DATE_TIME', 'June 3'): False, ('ADDRESS', 'Bend OR 97701'): True}
+
+
+@pytest.mark.parametrize('text, date, found, expected', [
+    # The house number read as a year.
+    ('Clinic: 2015 N Cedar Ridge STE 100, Bend\n', '2015', 'Cedar Ridge', 'Clinic: <ADDRESS>, Bend\n'),
+    # The ZIP code read as a date.
+    ('Owner: Ann Lee, Springfield 97477\n', '97477', 'Springfield', 'Owner: Ann Lee, <ADDRESS>\n'),
+])
+def test_date_wholly_inside_an_address_is_scrubbed_with_it(tmp_path, text, date, found, expected):
+    """
+    Test that a house number or ZIP code the model read as a date is scrubbed with the address around it, and
+    reported as scrubbed, so the visit date miner doesn't read it.
+    """
+    scrubbed, report = scrub_with_report(text, [span(text, date, 'DATE_TIME'), span(text, found, 'LOCATION')],
+                                         tmp_path)
+
+    assert scrubbed == expected
+    assert report[('DATE_TIME', date)] is True
+
+
+def test_month_name_date_that_could_be_a_name_is_scrubbed(tmp_path):
+    """
+    Test that a date that is only a month name that is also a first name is scrubbed, since it could be a person,
+    while a date with a number is kept.
+    """
+    text = 'Spoke with April about the recheck in April 2024.\n'
+    second = text.index('April 2024')
+    detections = [span(text, 'April', 'DATE_TIME'), ('DATE_TIME', second, second + len('April 2024'))]
+
+    scrubbed, report = scrub_with_report(text, detections, tmp_path)
+
+    assert scrubbed == 'Spoke with <DATE_TIME> about the recheck in April 2024.\n'
+    assert report == {('DATE_TIME', 'April'): True, ('DATE_TIME', 'April 2024'): False}
+
+
+def test_name_inside_a_date_without_a_number_is_scrubbed(tmp_path):
+    """
+    Test that a name is only kept with a date that has a number in it, so a first name that is also a month isn't
+    left in when the model also reads it as a date.
+    """
+    text = 'Seen Monday, June called back.\n'
+    detections = [span(text, 'Monday, June', 'DATE_TIME'), span(text, 'June', 'PERSON')]
+
+    scrubbed, report = scrub_with_report(text, detections, tmp_path)
+
+    assert 'June' not in scrubbed
+    assert report == {('DATE_TIME', 'Monday, June'): True, ('PERSON', 'June'): True}
+
+
+def test_detections_merged_into_an_address_are_listed_in_the_report(tmp_path):
+    """
+    Test that a name or phone number merged into an address is still listed in the report, as scrubbed and merged
+    into the address, so QA counts what was scrubbed in each file.
+    """
+    text = 'Clinic: 77 Old Mill Rd, Bend OR 97701 (541) 555-0134\n'
+    detections = [span(text, '77 Old Mill Rd, Bend OR 97701', 'ADDRESS'), span(text, 'Old Mill', 'PERSON'),
+                  span(text, '97701 (541) 555-0134', 'PHONE_NUMBER')]
+
+    scrubbed, results = pii_scrubber.scrub_pii(text, StubAnalyzer(detections), threshold=0.0)
+    report = tmp_path / 'confidence.json'
+    pii_scrubber.write_confidence_record(str(report), results, text)
+    entries = json.loads(report.read_text())
+
+    assert scrubbed == 'Clinic: <ADDRESS>\n'
+    assert [(e['Type'], e['Original Text'], e['Scrubbed'], e.get('Merged into')) for e in entries] == [
+        ('ADDRESS', '77 Old Mill Rd, Bend OR 97701 (541) 555-0134', True, None),
+        ('PERSON', 'Old Mill', True, 'ADDRESS'),
+        ('PHONE_NUMBER', '97701 (541) 555-0134', True, 'ADDRESS'),
+    ]
 
 
 def test_letterhead_address_parts_are_scrubbed(analyzer):
@@ -652,13 +727,19 @@ def test_title_and_short_surname_is_scrubbed(analyzer):
     'Bordetella, IN\n',
     'Recheck 4 Weeks Dr Smith\n',
     'Referred for 1 Abdominal CT scan\n',
+    'DAPP 1 ML SQ given\n',
+    'Fluids: 300 ML LRS SQ\n',
+    'Mandibular 2 Cm LN noted\n',
+    '1 ENLARGED POPLITEAL LN\n',
+    'ECG: 2 Mm ST Elevation\n',
 ])
 def test_medical_text_is_not_an_address(analyzer, text):
     """
-    Test that vaccine routes, recheck intervals and imaging orders aren't scrubbed as addresses.
+    Test that vaccine routes, doses, recheck intervals, imaging orders and exam findings aren't scrubbed as
+    addresses.
     """
     _, results = pii_scrubber.scrub_pii(text, analyzer, threshold=0.0)
-    assert 'ADDRESS' not in [result.entity_type for result in results]
+    assert 'ADDRESS' not in [d.result.entity_type for d in results]
 
 
 @pytest.mark.parametrize('street', ['1428 Larkspur Lane', '1428 Oak Dr'])
@@ -682,7 +763,7 @@ def test_address_split_between_pieces_is_still_scrubbed(analyzer, street):
         assert part not in scrubbed
     assert 'Clinic notes.' in scrubbed and 'Weight 31.2 kg' in scrubbed
     assert scrubbed.count('\n') == text.count('\n')
-    assert [result.entity_type for result in results].count('ADDRESS') == 2
+    assert [d.result.entity_type for d in results].count('ADDRESS') == 2
 
 
 @pytest.mark.parametrize('entity_type, part, expected', [

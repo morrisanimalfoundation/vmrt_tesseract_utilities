@@ -33,6 +33,17 @@ from vmrt_tesseract_utilities.pii_patterns import (address_around,
     ('22 WILLOW CT\n', ['22 WILLOW CT']),
     ('1428 Oak Dr N\n', ['1428 Oak Dr N']),
     ('1428 Maple Grove Ct (541) 555-0134', ['1428 Maple Grove Ct']),  # A letterhead's phone number after it.
+    # Other abbreviated street types, where the address goes on or ends.
+    ('7 Old Mill Rd, Bend OR 97701', ['7 Old Mill Rd, Bend OR 97701']),
+    ('5 Elm St\nBend, OR 97701', ['5 Elm St\nBend, OR 97701']),
+    ('Moved to 14 Elm St.\n', ['14 Elm St.']),
+    ('14 Larkspur Ln, Bend', ['14 Larkspur Ln']),
+    ('1428 LARKSPUR LN\n', ['1428 LARKSPUR LN']),
+    ('9 Town Sq Suite 2', ['9 Town Sq Suite 2']),
+    ('22 Willow Pl NE', ['22 Willow Pl NE']),
+    # Written-out street types count anywhere, even after a single digit.
+    ('5 Elm Street near the park', ['5 Elm Street']),
+    ('3 Kings Way, Bend', ['3 Kings Way']),
     # Parts of an address on their own.
     ('Located at 1428 Larkspur Lane near the park', ['1428 Larkspur Lane']),
     ('Springfield, OR 97477', ['Springfield, OR 97477']),
@@ -82,6 +93,18 @@ def test_addresses_are_found(text, expected):
     'Recheck 2 Weeks Dr, then',
     'Recheck 2 WEEKS DR\n',
     'Ordered 1 Skull CT\n',
+    # Medical abbreviations that are also abbreviated street types: subcutaneous, lymph node, ST segment.
+    'DAPP 1 ML SQ given',
+    'Fluids: 300 ML LRS SQ',
+    'Rabies 1 Yr Vaccine SQ RH',
+    '1 Enlarged Popliteal LN',
+    '1 ENLARGED POPLITEAL LN\n',
+    'Mandibular 2 Cm LN noted',
+    '2 Mm ST Elevation',
+    'ECG: 2 MM ST ELEVATION',
+    # A dose, size or time after a number isn't a house number, even before a written-out street type.
+    'Rx: 1 Tab PO Way',
+    'Give 2 Tabs With Food Daily, Drive slowly',
     # "ID" is an identifier's label, not Idaho.
     'Microchip ID 98102 implanted',
     'Patient ID 12345',
@@ -147,14 +170,13 @@ def test_street_name_is_not_taken_before_a_whole_address():
     ('See http://192.168.1.20/xray/44', ['http://192.168.1.20/xray/44']),
     ('Images at www.vetimaging.net/x/1', ['www.vetimaging.net/x/1']),
     ('Portal: sunnymeadowsvet.com/xray', ['sunnymeadowsvet.com/xray']),
-    ('Visit SUNNYMEADOWS.VET for hours', ['SUNNYMEADOWS.VET']),
+    ('Visit SUNNYMEADOWS.COM for hours', ['SUNNYMEADOWS.COM']),
     ('Results posted to myclinic.org.', ['myclinic.org']),
-    # TLDs a clinic is likely to use.
-    ('Visit bendanimalclinic.us', ['bendanimalclinic.us']),
+    # TLDs that are also words count with a path after them.
     ('sunnymeadows.pet/records', ['sunnymeadows.pet/records']),
-    ('See cedarridge.co for hours', ['cedarridge.co']),
-    ('Book at bayview.clinic', ['bayview.clinic']),
-    ('BAYVIEW.CARE', ['BAYVIEW.CARE']),
+    ('Visit bendanimalclinic.us/hours', ['bendanimalclinic.us/hours']),
+    ('SUNNYMEADOWS.VET/CONTACT', ['SUNNYMEADOWS.VET/CONTACT']),
+    ('Book at bayview.clinic/book today', ['bayview.clinic/book']),
     # Any TLD counts with a scheme or www.
     ('Report at https://lab.example.do/r/1', ['https://lab.example.do/r/1']),
     ('www.clinic.today', ['www.clinic.today']),
@@ -175,6 +197,15 @@ def test_urls_are_found(text, expected):
     'Recheck if worse.Us to call owner.',
     'Discussed with Dr.Smith at length.',
     'Dx: otitis externa.Tx: ear cleaning.',
+    # Words joined to a TLD that is also a word, with no path after it.
+    'PT VOMITING.DOG WAS QUIET',
+    'MOUTH.US was',
+    'HOME.CARE PLAN',
+    'seen by vet.dog ok',
+    'pet health.care plan',
+    'given.co 2',
+    'Book at bayview.clinic',
+    'SUNNYMEADOWS.VET',
     'Email margaret.thompson@example.com',  # Left to the email recognizer.
 ])
 def test_ordinary_text_is_not_a_url(text):
