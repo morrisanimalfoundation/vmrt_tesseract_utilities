@@ -197,6 +197,44 @@ The script exits with code 0 when everything succeeded, 3 when it finished but s
 model is built into the image at a pinned version, so no internet connection is needed (see **Updating the PII
 scrubber's model** below).
 
+What it keeps and removes, beyond what the model finds on its own:
+
+- **Dates and times are kept.** They're still listed in the confidence report (marked `"Scrubbed": false`),
+  which is where step 5 reads them from. Step 5 only reads the report's dates that weren't scrubbed, so a house
+  number such as `2015 Oak St` isn't taken for one, even if the model read it as a date. Something found
+  inside a date is kept with it only if it's just the date's words and numbers (`June` read as a name in
+  `June 3, 2023`, or `03-14-23` read as a phone number); a real phone number, ID or name inside a date is still
+  scrubbed, and so is a name inside a "date" with no number in it (`Owner: June`). A date that's only a month
+  name that is also a first name (`April`, `May`, `June`, `August`, `Jan`) is scrubbed too, since it may be a
+  person (`Spoke with April`), and on its own it's no use to step 5. A house number or ZIP code the model read as
+  a date is scrubbed with the address around it (`<2015 N Cedar Ridge>`).
+- **Addresses are removed whole.** US street addresses, PO boxes and "City, ST 12345" lines are replaced with
+  one `<ADDRESS>`, along with anything else the model found overlapping them, so no street, state or ZIP code
+  is left behind. Those other detections are still listed in the confidence report, marked
+  `"Merged into": "ADDRESS"`. Without a ZIP code, only a state's full name counts (`Bend, Oregon`), since abbreviations
+  after a comma are often medical ones (`Rabies, SC`), and `ID` only counts as Idaho after a city and a comma
+  (`Boise, ID 83702`), so `Patient ID 12345` is kept. Street types count anywhere (`Street`, `Lane`, `Ave`,
+  `Rd`, `Blvd`), except the abbreviations that are also medical ones (`St`, `Ln`, `Dr`, `Ct`, `Sq`, `Pl`), which
+  only count when the address clearly goes on after them (a direction, suite, phone number, or a city, state
+  and ZIP on the same line), or at the end of a line or before a comma when written in the same case as the street's name and
+  after a house number of two or more digits (`22 Willow Ct`, `22 WILLOW CT`). A number followed by a unit
+  (`1 ML`, `2 Cm`, `1 Yr`, `1 Tab`) is never a house number, and times and what a CT scan is of are never a
+  street's name, so `4 Weeks Dr Smith`, `Dr N. Patel`, `1 Abdominal CT scan`, `Performed 1 Abdominal CT`,
+  `CT W/CONTRAST`, `DAPP 1 ML SQ`, `1 Enlarged Popliteal LN` and `2 Mm ST Elevation` are kept. When the model
+  finds only part of an address, such as a street's or city's
+  name, the address parts right next to it on the same line are scrubbed with it: a house number and direction
+  before it, and the rest of the street, a suite or unit and a ZIP code after it (`1234 N <Cedar Ridge> STE 100`,
+  `<Springfield> 97477`). A state left on its own after a city is kept, since it doesn't identify anyone.
+- **URLs need a scheme (`https://`), `www.`, or a common top-level domain** (`.com`, `.net`, `.org`, `.edu`,
+  `.gov`, `.info` or `.biz`; the list is `BARE_DOMAIN_TLDS` in `vmrt_tesseract_utilities/pii_patterns.py`), so
+  words OCR joined with a full stop, such as `lethargic.do`, are kept. Top-level domains that are also words in
+  a vet record (`.dog`, `.vet`, `.pet`, `.care`, `.us` and others in `WORD_TLDS`) only count with a path after
+  them (`cedarridge.vet/contact`), so `VOMITING.DOG` and `HOME.CARE` are kept.
+- **Initials are kept, names are removed.** A name that's only initials (`JO`, `J.O.`), such as a staff
+  column's, is left in and listed in the report as not scrubbed. Three capitals in a row (`TOM`) and anything
+  after a title (`MRS. COX`) count as names. One caveat: a two-letter name written in capitals (`AL`) looks
+  the same as initials.
+
 ```bash
 python scripts/scrubbers/pii_scrubber.py /workspace/output
 ```
@@ -288,7 +326,9 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
   scrubbed before the change keep their old output: to scrub them again, set `pii_scrubber_output_file` and
   `pii_scrubber_confidence_file` back to `NULL` for those rows in `transcription_output` and rerun step 4. In
   particular, `scrub_txt_files.sh` used `--threshold=0.45` until November 2026, which left subject IDs, ZIP codes
-  and house numbers in the text, so rescrub anything it processed before then.
+  and house numbers in the text, so rescrub anything it processed before then. Output scrubbed before the
+  address, URL, date and initials changes above (also November 2026) can have partial clinic addresses, so
+  rescrub that too.
 - `--visit-date-threshold` (step 5) is how many days apart a date in the text and a known visit date can be
   and still count as a match. The default is 3.
 - `--search-unstructured-text-dir` (step 5) also searches the raw OCR text for dates, not only the PII
@@ -308,7 +348,7 @@ computer as well as from inside the container:
 | `output/unstructured_text/<document-type>/` | Raw OCR text (step 2), one file per PDF, page or line, named `<input id>-<PDF name>-<page>-<block>.txt` |
 | `output/list_replacement_output_file/<document-type>/` | Text after string replacement (step 3) |
 | `output/scrubbed_text/<document-type>/scrubbed_<document-type>/` | Text after PII scrubbing (step 4) |
-| `output/scrubbed_text/<document-type>/scrubbed_confidence/` | One JSON report per file listing what was detected and with what confidence (step 4) |
+| `output/scrubbed_text/<document-type>/scrubbed_confidence/` | One JSON report per file listing what was detected, with what confidence, and whether it was replaced (step 4) |
 
 OCR confidence scores and the matched visit dates (step 5) are stored in the database, not in files. To
 look at them, open a MySQL prompt from a second terminal on your own computer, using the password from your
