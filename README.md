@@ -213,9 +213,9 @@ What it keeps and removes, beyond what the model finds on its own:
   is left behind. Those other detections are still listed in the confidence report, marked
   `"Merged into": "ADDRESS"`. Without a ZIP code, only a state's full name counts (`Bend, Oregon`), since abbreviations
   after a comma are often medical ones (`Rabies, SC`), and `ID` only counts as Idaho after a city and a comma
-  (`Boise, ID 83702`), so `Patient ID 12345` is kept. Written-out street types (`Street`, `Lane`) count
-  anywhere, but abbreviated ones (`St`, `Ln`, `Dr`, `Ct`, `Sq` and so on) are often medical abbreviations, so
-  they only count when the address clearly goes on after them (a direction, suite, city, state and ZIP, or phone
+  (`Boise, ID 83702`), so `Patient ID 12345` is kept. Street types count anywhere (`Street`, `Lane`, `Ave`,
+  `Rd`, `Blvd`), except the abbreviations that are also medical ones (`St`, `Ln`, `Dr`, `Ct`, `Sq`, `Pl`), which
+  only count when the address clearly goes on after them (a direction, suite, city, state and ZIP, or phone
   number), or at the end of a line or before a comma when written in the same case as the street's name and
   after a house number of two or more digits (`22 Willow Ct`, `22 WILLOW CT`). A number followed by a unit
   (`1 ML`, `2 Cm`, `1 Yr`, `1 Tab`) is never a house number, and times and what a CT scan is of are never a

@@ -60,16 +60,17 @@ _UNIT = rf'(?:,?[ \t]*{_UNIT_WORD}[ \t]*#?[A-Z0-9-]+\b)?'
 
 _DIRECTION = r'[NSEW]{1,2}\b\.?'
 
-# Street types written out, in any case but starting with a capital, so "lane" in a sentence isn't one.
-_STREET_TYPE_WORDS = ('street', 'avenue', 'road', 'boulevard', 'lane', 'drive', 'court', 'circle', 'way', 'place',
-                      'parkway', 'terrace', 'trail', 'loop', 'pike', 'square', 'plaza')
+# Street types that count anywhere, in any case but starting with a capital, so "lane" in a sentence isn't one: the
+# written-out ones, and abbreviations that aren't also medical ones.
+_STREET_TYPE_WORDS = ('street', 'avenue', 'ave', 'road', 'rd', 'boulevard', 'blvd', 'lane', 'drive', 'court', 'circle',
+                      'cir', 'way', 'place', 'parkway', 'pkwy', 'terrace', 'ter', 'trail', 'trl', 'loop', 'pike',
+                      'square', 'plaza', 'plz')
 _STREET_TYPE = r'(?=[A-Z])(?i:' + '|'.join(_STREET_TYPE_WORDS) + r')\b\.?'
 
-# Abbreviated street types. Many are also medical abbreviations or something else ("Dr Smith", "1 Abdominal CT",
-# "1 ML SQ", "Popliteal LN", "2 Mm ST Elevation"), so they only count where the address clearly goes on after them,
-# or where they end a line or clause (see _street_name_then_type).
-_STREET_TYPE_ABBREVIATIONS = ('st', 'ave', 'rd', 'blvd', 'ln', 'dr', 'ct', 'cir', 'pl', 'pkwy', 'ter', 'trl', 'sq',
-                              'plz')
+# Abbreviated street types that are also medical abbreviations or something else ("Dr Smith", "1 Abdominal CT",
+# "SQ" for subcutaneous, "Popliteal LN", "ST Elevation", "PL" for platelets), so they only count where the address
+# clearly goes on after them, or where they end a line or clause (see _street_name_then_type).
+_STREET_TYPE_ABBREVIATIONS = ('st', 'ln', 'dr', 'ct', 'sq', 'pl')
 _ABBREVIATED_STREET_TYPE = r'(?=[A-Z])(?i:' + '|'.join(_STREET_TYPE_ABBREVIATIONS) + r')\b\.?'
 _TITLE_CASE_STREET_TYPE = '(?:' + '|'.join(a.capitalize() for a in _STREET_TYPE_ABBREVIATIONS) + r')\b\.?'
 _CAPS_STREET_TYPE = '(?:' + '|'.join(a.upper() for a in _STREET_TYPE_ABBREVIATIONS) + r')\b\.?'
@@ -102,10 +103,10 @@ def _street_name_then_type(name_of, at_line_end: bool = True) -> str:
     """
     The regex for a street's name followed by its type, where name_of(word) is the regex for the name made of words.
 
-    A written-out type counts anywhere. An abbreviated one counts where the address clearly goes on after it, and,
-    if at_line_end, also at the end of a line or before a comma or semicolon, but only written in the same case as
-    the name ("22 Willow Ct", "22 WILLOW CT"), since a capitalized abbreviation after an ordinary word ("Performed 1
-    Abdominal CT", "1 Enlarged Popliteal LN") is a medical one.
+    A type in _STREET_TYPE counts anywhere. One of _STREET_TYPE_ABBREVIATIONS counts where the address clearly goes
+    on after it, and, if at_line_end, also at the end of a line or before a comma or semicolon, but only written in
+    the same case as the name ("22 Willow Ct", "22 WILLOW CT"), since a capitalized abbreviation after an ordinary
+    word ("Performed 1 Abdominal CT", "1 Enlarged Popliteal LN") is a medical one.
     """
     line_end = (rf'|{name_of(_AMBIGUOUS_NAME_WORD)}{_TITLE_CASE_STREET_TYPE}{_LINE_OR_CLAUSE_END}'
                 rf'|{name_of(_CAPS_NAME_WORD)}{_CAPS_STREET_TYPE}{_LINE_OR_CLAUSE_END}') if at_line_end else ''

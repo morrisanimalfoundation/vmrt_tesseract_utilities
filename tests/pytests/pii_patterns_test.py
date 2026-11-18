@@ -41,9 +41,15 @@ from vmrt_tesseract_utilities.pii_patterns import (address_around,
     ('1428 LARKSPUR LN\n', ['1428 LARKSPUR LN']),
     ('9 Town Sq Suite 2', ['9 Town Sq Suite 2']),
     ('22 Willow Pl NE', ['22 Willow Pl NE']),
-    # Written-out street types count anywhere, even after a single digit.
+    # Written-out street types, and abbreviations that aren't medical ones, count anywhere, even after one digit.
     ('5 Elm Street near the park', ['5 Elm Street']),
     ('3 Kings Way, Bend', ['3 Kings Way']),
+    ('12345 W. Juniper Rd. Two Rivers', ['12345 W. Juniper Rd.']),
+    ('Home: 742 OAK RD BEND', ['742 OAK RD']),
+    ('1428 Larkspur Ave N Bend', ['1428 Larkspur Ave N']),
+    ('Clinic at 220 N.E. 3rd Ave. Bend', ['220 N.E. 3rd Ave.']),
+    ('220 1st 3rd Ave apt', ['220 1st 3rd Ave']),
+    ('Mail to 99 Harbor Blvd today', ['99 Harbor Blvd']),
     # Parts of an address on their own.
     ('Located at 1428 Larkspur Lane near the park', ['1428 Larkspur Lane']),
     ('Springfield, OR 97477', ['Springfield, OR 97477']),
