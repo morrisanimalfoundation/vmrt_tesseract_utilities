@@ -95,7 +95,8 @@ def run_exit_code(count: int, failure_count: int, max_failure_rate: float) -> in
     if not count:
         return 0
     if failure_count == count:
-        stdout_logger.error(f'All {count} files failed, so the run is treated as failed '
+        what = 'The only file' if count == 1 else f'All {count} files'
+        stdout_logger.error(f'{what} failed, so the run is treated as failed '
                             f'(exit code {EXIT_TOO_MANY_FAILURES}).')
         return EXIT_TOO_MANY_FAILURES
     if failure_count / count > max_failure_rate:
