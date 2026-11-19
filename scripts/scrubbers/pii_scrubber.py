@@ -562,7 +562,8 @@ def main() -> int:
     Scrubs the files, and works out the run's exit code.
 
     A file that fails doesn't stop the run, so the exit code is how anything checking it (scrub_txt_files.sh,
-    Jenkins) finds out that every file, or more than --max-failure-rate of them, failed.
+    Jenkins) finds out that every file, or more than --max-failure-rate of them, failed. Files marked failed for
+    being cut short twice weren't scrubbed this run, so they aren't counted.
 
     Returns
     -------
@@ -578,7 +579,11 @@ def main() -> int:
         return 1
     nlp_engine = create_nlp_engine(args.config)
     count, failures = scrub_chunks(args, nlp_engine)
-    return run_exit_code(count, len(failures), args.max_failure_rate)
+    # Files cut short twice are marked failed without being scrubbed this run, so they say nothing about whether
+    # this run worked: one file that always runs out of memory shouldn't fail every resumed run. They're still
+    # listed and recorded as failed.
+    interrupted = sum(1 for _, error in failures if error == INTERRUPTED_TWICE_ERROR)
+    return run_exit_code(count - interrupted, len(failures) - interrupted, args.max_failure_rate)
 
 
 if __name__ == '__main__':

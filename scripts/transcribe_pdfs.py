@@ -303,7 +303,8 @@ def main() -> int:
     Transcribes the queued PDFs, and works out the run's exit code.
 
     A PDF that fails doesn't stop the run, so the exit code is how anything checking it (Jenkins) finds out that
-    every PDF, or more than --max-failure-rate of them, failed.
+    every PDF, or more than --max-failure-rate of them, failed. PDFs marked failed for being cut short twice
+    weren't read this run, so they aren't counted. There's no --until-done, so the rate is of one --chunk-size batch.
 
     Returns
     -------
@@ -317,7 +318,11 @@ def main() -> int:
     except OcrSetupError as e:
         stdout_logger.error(f'Stopping before transcribing anything: {e}')
         return 1
-    return run_exit_code(count, len(failures), provided_args.max_failure_rate)
+    # PDFs cut short twice are marked failed without being read this run, so they say nothing about whether this
+    # run worked: one PDF that always runs out of memory shouldn't fail every resumed run. They're still listed and
+    # recorded as failed.
+    interrupted = sum(1 for _, error in failures if error == INTERRUPTED_TWICE_ERROR)
+    return run_exit_code(count - interrupted, len(failures) - interrupted, provided_args.max_failure_rate)
 
 
 if __name__ == '__main__':

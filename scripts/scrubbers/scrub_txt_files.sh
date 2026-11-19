@@ -25,10 +25,12 @@ fi
 # No --threshold, so every detection is removed (the default, 0.0). Some identifiers, such as ZIP codes and
 # house numbers, score around 0.4, so a higher threshold leaves them in the text.
 # --until-done keeps going until every file is scrubbed, rather than stopping after one chunk of 1000.
+# Any arguments after the output directory are passed on, e.g. --max-failure-rate 0.1.
 python "${SCRIPT_DIR}/pii_scrubber.py" \
   "$OUTPUT_DIR" \
   --config="${SCRIPT_DIR}/config/stanford-deidentifier-base_nlp.yaml" \
-  --until-done
+  --until-done \
+  "${@:2}"
 # Pass the scrubber's exit code on, so CI can tell 3 (too many files failed) apart from 1 (it couldn't run).
 SCRUB_EXIT_CODE=$?
 if [ "$SCRUB_EXIT_CODE" -eq 3 ]; then

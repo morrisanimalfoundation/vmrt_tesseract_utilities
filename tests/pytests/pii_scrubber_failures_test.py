@@ -481,3 +481,23 @@ def test_main_exits_with_1_when_it_cant_run(monkeypatch, tmp_path, engine):
 
     assert _main(monkeypatch, tmp_path) == 1
     assert _statuses(engine)['good.pdf'] == (None, None, False)
+
+
+def test_main_doesnt_count_a_file_cut_short_twice(monkeypatch, tmp_path, engine, caplog):
+    """
+    Test that a file marked failed for being cut short twice doesn't make a resumed run exit with 3.
+    """
+    with Session(engine) as session:
+        for output in session.query(database.TranscriptionOutput):
+            name = output.transcription_input.input_file
+            output.pii_scrubber_status = 'retrying' if name == 'other.pdf' else 'success'
+            if name != 'other.pdf':
+                output.pii_scrubber_output_file = 'done.txt'
+        session.commit()
+
+    with caplog.at_level(logging.INFO):
+        assert _main(monkeypatch, tmp_path) == 0
+
+    assert _statuses(engine)['other.pdf'] == ('failed', pii_scrubber.INTERRUPTED_TWICE_ERROR, False)
+    assert '1 file(s) failed:' in caplog.text
+    assert 'The only file failed' not in caplog.text

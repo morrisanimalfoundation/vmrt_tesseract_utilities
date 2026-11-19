@@ -6,8 +6,8 @@ import argparse
 
 from vmrt_tesseract_utilities.logging import stdout_logger
 
-# Exit code when a run finished but too many of its files failed, the same code replace_strings.py uses for a run
-# that finished with failures, so CI (e.g. Jenkins) can tell it apart from the script crashing (exit code 1).
+# Exit code when a run finished but too many of its files failed, so CI (e.g. Jenkins) can tell it apart from the
+# script crashing (exit code 1). replace_strings.py imports it as EXIT_INCOMPLETE, so every step uses the same code.
 EXIT_TOO_MANY_FAILURES = 3
 
 
@@ -51,7 +51,7 @@ def parse_failure_rate(value: str) -> float:
     try:
         rate = float(value)
     except ValueError:
-        raise argparse.ArgumentTypeError(f'{value!r} is not a number from 0 to 1')
+        raise argparse.ArgumentTypeError(f'{value!r} is not a number from 0 to 1') from None
     if not 0 <= rate <= 1:
         raise argparse.ArgumentTypeError(f'{value!r} is not a number from 0 to 1')
     return rate
@@ -68,7 +68,8 @@ def add_max_failure_rate_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('--max-failure-rate', type=parse_failure_rate, default=1.0, metavar='RATE',
                         help=f'Exit with code {EXIT_TOO_MANY_FAILURES} when more than this share of the files tried '
                              f'(0 to 1) failed. A run where every file failed always exits with '
-                             f'{EXIT_TOO_MANY_FAILURES}. Default: 1, so only that run does.')
+                             f'{EXIT_TOO_MANY_FAILURES}. Default: 1, so only that run does. The share is of the '
+                             f'files this run tried: without --until-done, that is one --chunk-size batch.')
 
 
 def run_exit_code(count: int, failure_count: int, max_failure_rate: float) -> int:
@@ -95,7 +96,8 @@ def run_exit_code(count: int, failure_count: int, max_failure_rate: float) -> in
     if not count:
         return 0
     if failure_count == count:
-        stdout_logger.error(f'All {count} files failed, so the run is treated as failed '
+        what = 'The only file' if count == 1 else f'All {count} files'
+        stdout_logger.error(f'{what} failed, so the run is treated as failed '
                             f'(exit code {EXIT_TOO_MANY_FAILURES}).')
         return EXIT_TOO_MANY_FAILURES
     if failure_count / count > max_failure_rate:

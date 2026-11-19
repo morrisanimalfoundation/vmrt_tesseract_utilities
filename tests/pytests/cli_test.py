@@ -88,6 +88,14 @@ def test_run_exit_code_logs_why_the_run_failed(caplog):
     assert '2 of 5 files failed, more than --max-failure-rate 0.3 allows' in caplog.text
 
 
+def test_run_exit_code_names_a_single_file(caplog):
+    """run_exit_code says 'The only file' rather than 'All 1 files' when the run tried one file."""
+    with caplog.at_level(logging.ERROR, logger='import_utility'):
+        run_exit_code(1, 1, 1.0)
+    assert 'The only file failed, so the run is treated as failed' in caplog.text
+    assert 'All 1 files' not in caplog.text
+
+
 @pytest.mark.parametrize('value, expected', [('0', 0.0), ('0.25', 0.25), ('1', 1.0)])
 def test_parse_failure_rate(value, expected):
     """parse_failure_rate accepts a number from 0 to 1."""
@@ -97,8 +105,10 @@ def test_parse_failure_rate(value, expected):
 @pytest.mark.parametrize('value', ['-0.1', '1.5', 'abc', 'nan'])
 def test_parse_failure_rate_rejects_other_values(value):
     """parse_failure_rate rejects anything that isn't a number from 0 to 1."""
-    with pytest.raises(argparse.ArgumentTypeError, match='is not a number from 0 to 1'):
+    with pytest.raises(argparse.ArgumentTypeError, match='is not a number from 0 to 1') as error:
         parse_failure_rate(value)
+    # Raised `from None`, so a traceback doesn't also show the ValueError from float().
+    assert error.value.__suppress_context__
 
 
 def test_max_failure_rate_argument():

@@ -244,9 +244,16 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
   `--max-failure-rate` of them, see below), and with 1 if they couldn't run at all. A run with no files to
   process exits with 0. Every file failing usually has one cause, such as a broken model, a bad config or a full
   disk, so a scheduler such as Jenkins checking the exit code sees that run as failed instead of successful.
+- Exit code 3 doesn't mean quite the same in every step. Step 3 (`replace_strings.py`) exits with 3 when **any**
+  file failed or is missing, since step 4 must not run on it. Steps 2 and 4 only exit with 3 when every file
+  failed or more than `--max-failure-rate` did, since a few failures there leave nothing unsafe behind.
 - `--max-failure-rate` (steps 2 and 4) is the largest share of the files tried, from 0 to 1, that can fail with
   the run still exiting with 0. The default `1` means only a run where every file failed exits with 3; for
-  example, `--max-failure-rate 0.1` also exits with 3 when more than 1 file in 10 failed.
+  example, `--max-failure-rate 0.1` also exits with 3 when more than 1 file in 10 failed. The share is of the
+  files that one run tried. Step 4 with `--until-done` tries every file, but step 2 has no `--until-done`, so its
+  rate is of one `--chunk-size` batch: with 2,001 PDFs, a last run of 1 PDF that fails exits with 3, even though
+  1 in 2,001 failed overall. Files marked failed for being cut short twice (`OcrInterrupted`,
+  `ScrubInterrupted`) aren't read again, so they aren't counted: they're still listed as failed.
 - Step 2 marks each PDF `started` while reading it. If the run is killed part way through a PDF (it ran out of
   memory, or the job was stopped), the next run finds it still `started` and tries it once more as `retrying`. If
   that attempt is cut short too, the PDF is marked `failed` with an `OcrInterrupted` error and skipped from then
@@ -304,7 +311,9 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 
 `scripts/scrubbers/scrub_txt_files.sh /workspace/output` is an alternative way to run step 4. It installs
 any spaCy models listed in `scripts/scrubbers/config/` first, then runs `pii_scrubber.py` with the default
-threshold and `--until-done`, so it scrubs every file rather than one batch. It exits with the scrubber's exit
+threshold and `--until-done`, so it scrubs every file rather than one batch. Any options after the output
+directory are passed on to `pii_scrubber.py`, for example
+`scripts/scrubbers/scrub_txt_files.sh /workspace/output --max-failure-rate 0.1`. It exits with the scrubber's exit
 code, so 3 when every file failed.
 
 ## Where the results go

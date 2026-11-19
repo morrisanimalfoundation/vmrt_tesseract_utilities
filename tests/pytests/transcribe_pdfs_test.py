@@ -575,6 +575,30 @@ def test_main_exits_with_1_when_ocr_is_not_set_up(monkeypatch, tmp_path, engine)
     assert {status for status, _ in _statuses(engine).values()} == {None}
 
 
+def test_main_doesnt_count_a_pdf_cut_short_twice(monkeypatch, tmp_path, caplog, engine):
+    """
+    Test that a PDF marked failed for being cut short twice doesn't make a resumed run exit with 3.
+
+    Asserts:
+        With only that PDF left, it's still recorded and listed as failed, but the exit code is 0.
+    """
+    with Session(engine) as session:
+        for db_input in session.query(TranscriptionInput):
+            if db_input.input_file == 'blank.pdf':
+                db_input.ocr_status = 'retrying'
+            else:
+                db_input.ocr_status = 'success'
+                db_input.assets.append(TranscriptionOutput(ocr_output_file=f'{db_input.input_file}.txt'))
+        session.commit()
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', _killed_on())
+    with caplog.at_level(logging.INFO, logger='import_utility'):
+        assert _main(monkeypatch, tmp_path) == 0
+    assert _statuses(engine)['blank.pdf'] == ('failed', transcribe_pdfs.INTERRUPTED_TWICE_ERROR)
+    assert '1 file(s) failed:' in caplog.text
+    assert 'files failed, so the run is treated as failed' not in caplog.text
+    assert 'The only file failed' not in caplog.text
+
+
 @pytest.mark.parametrize('mode, results', [
     ('page', [
         {'content': 'Page one', 'confidence': 91.0, 'page': 1, 'block': 0},

@@ -17,6 +17,8 @@ from typing import Iterable, List, Optional
 from sqlalchemy import and_, or_
 from sqlalchemy.pool import NullPool
 
+from vmrt_tesseract_utilities.cli import \
+    EXIT_TOO_MANY_FAILURES as EXIT_INCOMPLETE
 from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.database import (StringReplacementCompletion,
                                                StringReplacementPass,
@@ -28,10 +30,6 @@ from vmrt_tesseract_utilities.string_replacer import StringReplacer
 
 # Increment this when the replacement matching behavior changes
 REPLACEMENT_ALGORITHM_VERSION = "1"
-
-# Exit code when the run finished but some files failed or had missing output, so CI (e.g. Jenkins) can tell it
-# apart from the script crashing (exit code 1).
-EXIT_INCOMPLETE = 3
 
 # How many failed or missing files to list in the log; the rest are counted.
 MAX_LISTED = 20
