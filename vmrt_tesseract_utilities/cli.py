@@ -51,7 +51,7 @@ def parse_failure_rate(value: str) -> float:
     try:
         rate = float(value)
     except ValueError:
-        raise argparse.ArgumentTypeError(f'{value!r} is not a number from 0 to 1')
+        raise argparse.ArgumentTypeError(f'{value!r} is not a number from 0 to 1') from None
     if not 0 <= rate <= 1:
         raise argparse.ArgumentTypeError(f'{value!r} is not a number from 0 to 1')
     return rate
