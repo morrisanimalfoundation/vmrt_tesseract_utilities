@@ -199,10 +199,13 @@ def run_tesseract(args: argparse.Namespace) -> tuple[int, list[tuple[str, str]]]
         query = (query.order_by(TranscriptionInput.id, TranscriptionOutput.id)
                  .limit(args.chunk_size)
                  .offset(args.offset))
-        count = query.count()
+        # Counted from the rows loaded, not a separate count query, so the count is the number of files this run
+        # tries even if an overlapping run fills some of them in between.
+        rows = query.all()
+        count = len(rows)
         stdout_logger.info(f'Found {count} files to transcribe.')
         failures = []
-        for db_input, db_output in query.all():
+        for db_input, db_output in rows:
             db_output_logs = []
             if db_input.ocr_status == STATUS_RETRYING and not args.retry_failed:
                 _record_failure(session, db_input, INTERRUPTED_TWICE_ERROR, failures)
