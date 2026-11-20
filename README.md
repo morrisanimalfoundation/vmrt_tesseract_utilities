@@ -263,9 +263,9 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 | Script | Document type | Batch size | Skip records | Show SQL | Other |
 | --- | --- | --- | --- | --- | --- |
 | `create_transcription_process.py` | `--document-type` | — | — | `--debug-sql` | |
-| `transcribe_pdfs.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--retry-failed`, `--shard` |
+| `transcribe_pdfs.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--retry-failed`, `--shard`, `--max-failure-rate` |
 | `replace_strings.py` | `--document-type` | `--chunk-size` | — | `--debug-sql` | `--max-workers`, `--no-multiprocessing`, `--until-done`, `--retry-failed` |
-| `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config`, `--until-done`, `--retry-failed` |
+| `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config`, `--until-done`, `--retry-failed`, `--max-failure-rate` |
 | `visit_date_miner.py` | — | `--chunk-size` | `--offset` | `--debug-sql` | `--visit-date-threshold`, `--search-unstructured-text-dir` |
 
 - **Document type** (`document`, `page`, or `block`; default `document`) controls how finely the OCR output
@@ -277,7 +277,21 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 - Step 2 records each PDF it finishes as `success` or `failed` (`ocr_status` and `ocr_error` in
   `transcription_input`; `NULL` means not tried yet), keeps going after a failure, and lists every failed file at the end. Failed files are
   skipped on later runs; pass `--retry-failed` to try them again. If poppler or Tesseract isn't usable, step 2
-  stops before touching any file.
+  stops before touching any file and exits with 1.
+- Steps 2 and 4 exit with 0 when a few files failed, with 3 when every file they tried failed (or more than
+  `--max-failure-rate` of them, see below), and with 1 if they couldn't run at all. A run with no files to
+  process exits with 0. Every file failing usually has one cause, such as a broken model, a bad config or a full
+  disk, so a scheduler such as Jenkins checking the exit code sees that run as failed instead of successful.
+- Exit code 3 doesn't mean quite the same in every step. Step 3 (`replace_strings.py`) exits with 3 when **any**
+  file failed or is missing, since step 4 must not run on it. Steps 2 and 4 only exit with 3 when every file
+  failed or more than `--max-failure-rate` did, since a few failures there leave nothing unsafe behind.
+- `--max-failure-rate` (steps 2 and 4) is the largest share of the files tried, from 0 to 1, that can fail with
+  the run still exiting with 0. The default `1` means only a run where every file failed exits with 3; for
+  example, `--max-failure-rate 0.1` also exits with 3 when more than 1 file in 10 failed. The share is of the
+  files that one run tried. Step 4 with `--until-done` tries every file, but step 2 has no `--until-done`, so its
+  rate is of one `--chunk-size` batch: with 2,001 PDFs, a last run of 1 PDF that fails exits with 3, even though
+  1 in 2,001 failed overall. Files marked failed for being cut short twice (`OcrInterrupted`,
+  `ScrubInterrupted`) aren't read again, so they aren't counted: they're still listed as failed.
 - Step 2 marks each PDF `started` while reading it. If the run is killed part way through a PDF (it ran out of
   memory, or the job was stopped), the next run finds it still `started` and tries it once more as `retrying`. If
   that attempt is cut short too, the PDF is marked `failed` with an `OcrInterrupted` error and skipped from then
@@ -312,7 +326,8 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
   `transcription_output`; `NULL` means not tried yet), saving each file as it finishes. A file that fails is
   left unscrubbed, with no scrubbed output, and the run keeps going and lists every failed file at the end.
   Failed files are skipped on later runs; pass `--retry-failed` to try them again (each at most once per run).
-  The run exits with 0 even when files failed, as step 2 does, so check the list or the database.
+  As with step 2, the run exits with 0 when only a few files failed, so check the list or the database; it
+  exits with 3 when every file failed, or more than `--max-failure-rate` of them.
 - Like step 2, step 4 marks each file `started` while scrubbing it. If the run is killed part way through a file,
   the next run tries it once more as `retrying`, and if that attempt is cut short too, marks it `failed` with a
   `ScrubInterrupted` error and skips it from then on. `--retry-failed` tries it again.
@@ -336,7 +351,10 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 
 `scripts/scrubbers/scrub_txt_files.sh /workspace/output` is an alternative way to run step 4. It installs
 any spaCy models listed in `scripts/scrubbers/config/` first, then runs `pii_scrubber.py` with the default
-threshold and `--until-done`, so it scrubs every file rather than one batch.
+threshold and `--until-done`, so it scrubs every file rather than one batch. Any options after the output
+directory are passed on to `pii_scrubber.py`, for example
+`scripts/scrubbers/scrub_txt_files.sh /workspace/output --max-failure-rate 0.1`. It exits with the scrubber's exit
+code, so 3 when every file failed.
 
 ## Where the results go
 

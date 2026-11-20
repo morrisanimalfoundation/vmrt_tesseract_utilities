@@ -4,7 +4,9 @@ import re
 import sys
 from typing import LiteralString
 
-from vmrt_tesseract_utilities.cli import normalize_flag_spelling
+from vmrt_tesseract_utilities.cli import (add_max_failure_rate_argument,
+                                          normalize_flag_spelling,
+                                          run_exit_code)
 from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                TranscriptionOutput,
                                                get_database_session)
@@ -137,7 +139,7 @@ def parse_shard(value: str) -> tuple[int, int]:
     return shard_index, shard_count
 
 
-def run_tesseract(args: argparse.Namespace) -> None:
+def run_tesseract(args: argparse.Namespace) -> tuple[int, list[tuple[str, str]]]:
     """
     Runs a Tesseract strategy over the pages of a PDF.
 
@@ -158,6 +160,11 @@ def run_tesseract(args: argparse.Namespace) -> None:
     ----------
     args: argparse.Namespace
         The parsed args.
+
+    Returns
+    -------
+    tuple[int, list[tuple[str, str]]]
+        The number of files tried, and (input file, error) for each file that failed.
 
     Raises
     ------
@@ -192,10 +199,13 @@ def run_tesseract(args: argparse.Namespace) -> None:
         query = (query.order_by(TranscriptionInput.id, TranscriptionOutput.id)
                  .limit(args.chunk_size)
                  .offset(args.offset))
-        count = query.count()
+        # Counted from the rows loaded, not a separate count query, so the count is the number of files this run
+        # tries even if an overlapping run fills some of them in between.
+        rows = query.all()
+        count = len(rows)
         stdout_logger.info(f'Found {count} files to transcribe.')
         failures = []
-        for db_input, db_output in query.all():
+        for db_input, db_output in rows:
             db_output_logs = []
             if db_input.ocr_status == STATUS_RETRYING and not args.retry_failed:
                 _record_failure(session, db_input, INTERRUPTED_TWICE_ERROR, failures)
@@ -237,6 +247,7 @@ def run_tesseract(args: argparse.Namespace) -> None:
             # Commit per file, so a crash part way through a chunk only loses the file in progress.
             session.commit()
     log_run_summary('Transcribed', count, failures)
+    return count, failures
 
 
 def _record_failure(session, db_input: TranscriptionInput, error: str, failures: list) -> None:
@@ -286,13 +297,36 @@ def parse_args() -> argparse.Namespace:
                         help='Only process inputs whose ID leaves remainder i when divided by N, so N runs started '
                              'with 0/N to N-1/N can transcribe in parallel without picking the same file.')
     parser.add_argument('--debug-sql', action='store_true', help='Enable SQL debugging')
+    add_max_failure_rate_argument(parser)
     return parser.parse_args(normalize_flag_spelling(sys.argv[1:]))
 
 
-if __name__ == '__main__':
+def main() -> int:
+    """
+    Transcribes the queued PDFs, and works out the run's exit code.
+
+    A PDF that fails doesn't stop the run, so the exit code is how anything checking it (Jenkins) finds out that
+    every PDF, or more than --max-failure-rate of them, failed. PDFs marked failed for being cut short twice
+    weren't read this run, so they aren't counted. There's no --until-done, so the rate is of one --chunk-size batch.
+
+    Returns
+    -------
+    int
+        0 if the run succeeded, 1 if the OCR tools aren't usable, or EXIT_TOO_MANY_FAILURES if too many PDFs
+        failed.
+    """
     provided_args = parse_args()
     try:
-        run_tesseract(provided_args)
+        count, failures = run_tesseract(provided_args)
     except OcrSetupError as e:
         stdout_logger.error(f'Stopping before transcribing anything: {e}')
-        sys.exit(1)
+        return 1
+    # PDFs cut short twice are marked failed without being read this run, so they say nothing about whether this
+    # run worked: one PDF that always runs out of memory shouldn't fail every resumed run. They're still listed and
+    # recorded as failed.
+    interrupted = sum(1 for _, error in failures if error == INTERRUPTED_TWICE_ERROR)
+    return run_exit_code(count - interrupted, len(failures) - interrupted, provided_args.max_failure_rate)
+
+
+if __name__ == '__main__':
+    sys.exit(main())
