@@ -499,5 +499,5 @@ def test_main_doesnt_count_a_file_cut_short_twice(monkeypatch, tmp_path, engine,
         assert _main(monkeypatch, tmp_path) == 0
 
     assert _statuses(engine)['other.pdf'] == ('failed', pii_scrubber.INTERRUPTED_TWICE_ERROR, False)
-    assert '1 file(s) failed:' in caplog.text
+    assert '1 file(s) failed and were skipped' in caplog.text
     assert 'The only file failed' not in caplog.text

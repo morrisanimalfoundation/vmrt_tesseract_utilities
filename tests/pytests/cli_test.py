@@ -105,9 +105,14 @@ def test_parse_failure_rate(value, expected):
 @pytest.mark.parametrize('value', ['-0.1', '1.5', 'abc', 'nan'])
 def test_parse_failure_rate_rejects_other_values(value):
     """parse_failure_rate rejects anything that isn't a number from 0 to 1."""
-    with pytest.raises(argparse.ArgumentTypeError, match='is not a number from 0 to 1') as error:
+    with pytest.raises(argparse.ArgumentTypeError, match='is not a number from 0 to 1'):
         parse_failure_rate(value)
-    # Raised `from None`, so a traceback doesn't also show the ValueError from float().
+
+
+def test_parse_failure_rate_hides_the_float_error():
+    """A value that isn't a number is raised `from None`, so a traceback doesn't also show float()'s ValueError."""
+    with pytest.raises(argparse.ArgumentTypeError) as error:
+        parse_failure_rate('abc')
     assert error.value.__suppress_context__
 
 
