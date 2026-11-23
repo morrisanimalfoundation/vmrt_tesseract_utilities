@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from dotenv import load_dotenv
 from sqlalchemy import (DateTime, Float, ForeignKey, Integer, String, Text,
-                        UniqueConstraint, create_engine, func)
+                        UniqueConstraint, create_engine, func, inspect)
 from sqlalchemy.dialects.mysql import VARCHAR
 from sqlalchemy.orm import (DeclarativeBase, Mapped, mapped_column,
                             relationship, sessionmaker)
@@ -19,6 +19,15 @@ Database models and related utilities.
 # and output paths add up to about 90 characters of folders to the PDF's name. In MySQL, input_file is part of a
 # unique index, which with utf8mb4 allows at most 768 characters across its columns.
 PATH_LENGTH = 512
+# Adds the text_source column (issue #82) to a database created before it.
+ADD_TEXT_SOURCE_SQL = 'ALTER TABLE transcription_output ADD COLUMN text_source VARCHAR(20);'
+
+
+class MissingColumnError(RuntimeError):
+    """
+    Raised when the database was created before a column the code needs was added.
+    """
+    pass
 
 
 class Base(DeclarativeBase):
@@ -69,7 +78,11 @@ class TranscriptionOutput(Base):
     input_id: Mapped[int] = mapped_column(ForeignKey('transcription_input.id'))
     transcription_input: Mapped['TranscriptionInput'] = relationship(back_populates='assets')
     ocr_output_file: Mapped[Optional[str]] = mapped_column(String(PATH_LENGTH))
+    # Tesseract's mean confidence, or None when the text came from the PDF's own text layer (no OCR).
     ocr_confidence: Mapped[Optional[float]] = mapped_column(Float)
+    # Where the text came from: 'text_layer' (the PDF's own text), 'ocr', or 'mixed' (a whole document read both
+    # ways). None for text transcribed before issue #82, which was all OCR.
+    text_source: Mapped[Optional[str]] = mapped_column(String(20))
     list_replacement_output_file: Mapped[Optional[str]] = mapped_column(String(PATH_LENGTH))
     pii_scrubber_output_file: Mapped[Optional[str]] = mapped_column(String(PATH_LENGTH))
     pii_scrubber_confidence_file: Mapped[Optional[str]] = mapped_column(String(PATH_LENGTH))
@@ -144,6 +157,28 @@ class StringReplacementCompletion(Base):
             name="uq_string_replacement_completion",
         ),
     )
+
+
+def check_text_source_column(engine) -> None:
+    """
+    Checks that transcription_output has the text_source column, which every step reads and step 2 fills in.
+
+    `database_setup.py install` creates missing tables but doesn't add columns to existing ones, so a database
+    created before issue #82 doesn't have it. Without this check, every query of the table would fail with MySQL's
+    "Unknown column" error instead.
+
+    Raises
+    ------
+    MissingColumnError
+        If the table exists without the column, with the SQL that adds it.
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table('transcription_output'):
+        return
+    if 'text_source' not in {column['name'] for column in inspector.get_columns('transcription_output')}:
+        raise MissingColumnError(f'The transcription_output table has no text_source column, which records where '
+                                 f'each text came from. The database was created before it was added: add it with\n'
+                                 f'  {ADD_TEXT_SOURCE_SQL}')
 
 
 def get_database_session(**kwargs) -> sessionmaker:

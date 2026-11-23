@@ -6,8 +6,10 @@ import pytest
 
 from vmrt_tesseract_utilities import tesseract_operations
 from vmrt_tesseract_utilities.tesseract_operations import (
-    NoTextFoundError, OcrSetupError, PageTooLargeError, TesseractOperationDoc,
+    SOURCE_MIXED, SOURCE_OCR, SOURCE_TEXT_LAYER, NoTextFoundError,
+    OcrSetupError, PageTooLargeError, TesseractOperationDoc,
     TesseractOperationPage, check_ocr_setup)
+from vmrt_tesseract_utilities.text_layer import PageText, TextLayerError
 
 """
 Tests for how the Tesseract operations report failures, with pdf2image and tesserocr replaced by fakes, so they
@@ -58,6 +60,50 @@ def test_no_text_raises(monkeypatch, operation):
     _fake_ocr(monkeypatch, pages=2, text='', confidence=0)
     with pytest.raises(NoTextFoundError, match='blank.pdf'):
         operation().process_row('blank.pdf')
+
+
+def test_unreadable_text_layer_falls_back_to_ocr(monkeypatch, caplog):
+    """
+    Test that a PDF whose text layer poppler can't read is read with OCR, with a warning, rather than failing.
+
+    Asserts:
+        Every page comes from OCR, and the warning names the file and the problem.
+    """
+    _fake_ocr(monkeypatch, pages=2, text='Patient is a good dog.', confidence=80)
+
+    def unreadable(path):
+        raise TextLayerError('pdftotext exited with code 1 on odd.pdf: Syntax Error')
+
+    monkeypatch.setattr(tesseract_operations, 'read_pages', unreadable)
+    with caplog.at_level(logging.WARNING, logger='import_utility'):
+        output = TesseractOperationPage().process_row('odd.pdf')
+    assert [o['source'] for o in output] == [SOURCE_OCR, SOURCE_OCR]
+    assert 'odd.pdf: its text layer could not be read, so every page is read with OCR' in caplog.text
+
+
+def test_text_layer_pages_skip_ocr(monkeypatch, caplog):
+    """
+    Test that pages whose text layer is used are neither rendered nor read with OCR, and the rest are.
+
+    Asserts:
+        Page 1 comes from its text layer with no confidence, page 2 from OCR, and only page 2 is rendered.
+        The document's confidence is page 2's, and its source is mixed.
+        The log says how many pages came from each.
+    """
+    _fake_ocr(monkeypatch, pages=2, text='Recheck exam.', confidence=80)
+    rendered = []
+    monkeypatch.setattr(tesseract_operations.pdf2image, 'convert_from_path',
+                        lambda path, **kwargs: rendered.append(kwargs['first_page']) or [mock.MagicMock()])
+    monkeypatch.setattr(tesseract_operations, 'read_pages', lambda path: [
+        PageText(1, 'Annual exam. Weight 32 kg.', ''), PageText(2, '', 'no text layer')])
+    with caplog.at_level(logging.INFO, logger='import_utility'):
+        pages = TesseractOperationPage().process_row('mixed.pdf')
+    assert [(o['source'], o['confidence']) for o in pages] == [(SOURCE_TEXT_LAYER, None), (SOURCE_OCR, 80)]
+    assert pages[0]['content'] == 'Annual exam. Weight 32 kg.'
+    assert rendered == [2]
+    assert 'mixed.pdf: 1 of 2 pages read from the text layer, 1 with OCR (no text layer 1).' in caplog.text
+    [document] = TesseractOperationDoc().process_row('mixed.pdf')
+    assert (document['source'], document['confidence']) == (SOURCE_MIXED, 80)
 
 
 def test_unreadable_pdf_raises(monkeypatch):
@@ -140,7 +186,7 @@ def test_page_sizes_logs_when_pdfinfo_fails(monkeypatch, caplog):
     assert "Couldn't read xref table" in caplog.text
 
 
-def _fake_setup(monkeypatch, tools=('pdfinfo', 'pdftoppm'), tessdata_exists=True, models=('eng', 'osd'),
+def _fake_setup(monkeypatch, tools=('pdfinfo', 'pdftoppm', 'pdftotext', 'pdfimages'), tessdata_exists=True, models=('eng', 'osd'),
                 init_error=None):
     """
     Replaces the poppler lookup, the tessdata directory and model checks, and Tesseract start-up.
@@ -175,6 +221,18 @@ def test_check_ocr_setup_missing_poppler(monkeypatch):
     """
     _fake_setup(monkeypatch, tools=('pdftoppm',))
     with pytest.raises(OcrSetupError, match='Poppler is not installed.*pdfinfo'):
+        check_ocr_setup()
+
+
+def test_check_ocr_setup_missing_text_layer_tools(monkeypatch):
+    """
+    Test that poppler without its text tools stops the run, since the text layer is read with them.
+
+    Asserts:
+        OcrSetupError names the missing tools.
+    """
+    _fake_setup(monkeypatch, tools=('pdfinfo', 'pdftoppm'))
+    with pytest.raises(OcrSetupError, match='missing pdftotext, pdfimages'):
         check_ocr_setup()
 
 

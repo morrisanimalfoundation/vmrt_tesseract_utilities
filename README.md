@@ -22,6 +22,7 @@ Goals:
 - [Running the pipeline](#running-the-pipeline)
 - [Where the results go](#where-the-results-go)
 - [Stopping, restarting, and starting over](#stopping-restarting-and-starting-over)
+- [Redoing records after the text layer change](#redoing-records-after-the-text-layer-change)
 - [Reference data files](#reference-data-files)
 - [Troubleshooting](#troubleshooting)
 - [Working with git](#working-with-git)
@@ -36,7 +37,7 @@ off:
 | Step | Script | What it does |
 | --- | --- | --- |
 | 1 | `create_transcription_process.py` | Finds the EMR files and queues them for processing |
-| 2 | `transcribe_pdfs.py` | Runs OCR (Tesseract) to turn each PDF into text |
+| 2 | `transcribe_pdfs.py` | Turns each PDF into text: copies the text out of pages made on a computer, and runs OCR (Tesseract) on the rest |
 | 3 | `replace_strings.py` | Replaces known identifying values (e.g. subject IDs) with a placeholder |
 | 4 | `pii_scrubber.py` | Finds and removes remaining PII using an NLP model (Presidio) |
 | 5 | `visit_date_miner.py` | Matches dates found in the text to known vet visit dates |
@@ -163,12 +164,30 @@ adds PDFs that aren't registered yet, so rerun it after new records arrive.
 python scripts/create_transcription_process.py /data
 ```
 
-**2. Run OCR** — runs Tesseract over the queued PDFs. This is the slow step. A page that reads poorly is
-checked for being scanned sideways or upside down, and if it was, it's turned upright and read again. Before
-November 2026, pages upside down or turned 90 degrees counter-clockwise
-came out as garbage, and every later step worked from that text. To redo records processed before then, start
-over from step 1 with an empty database (see [Stopping, restarting, and starting over](#stopping-restarting-and-starting-over)).
-Otherwise steps 2 to 5 skip the files they have already processed, so running them again changes nothing.
+**2. Get the text** — turns each queued PDF into text. Most pages were made on a computer (printed to PDF by
+the clinic's software), so the PDF already holds their exact text: those pages are copied out with `pdftotext
+-layout`, which makes no reading mistakes and keeps each table row on one line. Every other page is read with
+Tesseract OCR, which is the slow part:
+
+- scans, including scans that came with the scanner's or fax's own OCR text (it's read again, since its quality
+  is unknown);
+- pages with too little text to be the page's own (under 100 characters, such as a fax header on a scan);
+- pages with an image covering 10% or more of them, such as a scanned lab report pasted into a letter, since the
+  PDF's text doesn't include the image's;
+- pages whose text is garbled, which a broken font can do: they look right, but copy out as symbols.
+
+On the real records that's about 73% of pages copied out and 27% read with OCR; issue #82 has how each rule was
+checked. Text copied out of the PDF has no OCR confidence score, so its `ocr_confidence` is left empty, and every
+result records where its text came from (see [Where the results go](#where-the-results-go)). To read every page
+with OCR instead, as before, add `--ocr-only`.
+
+A page read with OCR that reads poorly is checked for being scanned sideways or upside down, and if it was, it's
+turned upright and read again. Before November 2026, pages upside down or turned 90 degrees counter-clockwise came
+out as garbage, and every later step worked from that text. To redo records processed before then, start over from
+step 1 with an empty database (see [Stopping, restarting, and starting over](#stopping-restarting-and-starting-over)).
+Records processed before step 2 started copying text out of PDFs can be redone without starting over; see
+[Redoing records after the text layer change](#redoing-records-after-the-text-layer-change). Otherwise steps 2 to 5
+skip the files they have already processed, so running them again changes nothing.
 
 ```bash
 python scripts/transcribe_pdfs.py /workspace/output
@@ -263,10 +282,11 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 | Script | Document type | Batch size | Skip records | Show SQL | Other |
 | --- | --- | --- | --- | --- | --- |
 | `create_transcription_process.py` | `--document-type` | — | — | `--debug-sql` | |
-| `transcribe_pdfs.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--retry-failed`, `--shard`, `--max-failure-rate` |
+| `transcribe_pdfs.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--retry-failed`, `--shard`, `--max-failure-rate`, `--ocr-only` |
 | `replace_strings.py` | `--document-type` | `--chunk-size` | — | `--debug-sql` | `--max-workers`, `--no-multiprocessing`, `--until-done`, `--retry-failed` |
 | `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config`, `--until-done`, `--retry-failed`, `--max-failure-rate` |
 | `visit_date_miner.py` | — | `--chunk-size` | `--offset` | `--debug-sql` | `--visit-date-threshold`, `--search-unstructured-text-dir` |
+| `redo_text_layer.py` | `--document-type` | `--chunk-size` | — | `--debug-sql` | `--dry-run`, `--workers` (see [Redoing records after the text layer change](#redoing-records-after-the-text-layer-change)) |
 
 - **Document type** (`document`, `page`, or `block`; default `document`) controls how finely the OCR output
   is split: one text file per PDF, one per page, or one per detected line of text. Whatever you choose in
@@ -363,21 +383,24 @@ computer as well as from inside the container:
 
 | Path | Contents |
 | --- | --- |
-| `output/unstructured_text/<document-type>/` | Raw OCR text (step 2), one file per PDF, page or line, named `<input id>-<PDF name>-<page>-<block>.txt` |
+| `output/unstructured_text/<document-type>/` | Raw text (step 2), copied out of the PDF or read with OCR, one file per PDF, page or line, named `<input id>-<PDF name>-<page>-<block>.txt` |
 | `output/list_replacement_output_file/<document-type>/` | Text after string replacement (step 3) |
 | `output/scrubbed_text/<document-type>/scrubbed_<document-type>/` | Text after PII scrubbing (step 4) |
 | `output/scrubbed_text/<document-type>/scrubbed_confidence/` | One JSON report per file listing what was detected, with what confidence, and whether it was replaced (step 4) |
 
-OCR confidence scores and the matched visit dates (step 5) are stored in the database, not in files. To
-look at them, open a MySQL prompt from a second terminal on your own computer, using the password from your
-`.env`:
+OCR confidence scores, where each text came from, and the matched visit dates (step 5) are stored in the
+database, not in files. `text_source` in `transcription_output` is `text_layer` for text copied out of the PDF
+(which has no `ocr_confidence`), `ocr` for text read with OCR, and `mixed` for a whole PDF read both ways in
+`document` mode (its confidence is that of the pages read with OCR). It's empty for text from before issue #82,
+which was all OCR. To look at them, open a MySQL prompt from a second terminal on your own computer, using the
+password from your `.env`:
 
 ```bash
 docker exec -it vmrt-emr-process-log-mysql mysql -uroot -p vmrt_emr_transcription
 ```
 
 ```sql
-SELECT ocr_output_file, ocr_confidence FROM transcription_output LIMIT 10;
+SELECT ocr_output_file, ocr_confidence, text_source FROM transcription_output LIMIT 10;
 SELECT subject_id, visit_date, extracted_date FROM transcription_metadata LIMIT 10;
 ```
 
@@ -427,6 +450,12 @@ it, or copy it anywhere it is not supposed to be.
   ```sql
   ALTER TABLE transcription_output ADD COLUMN pii_scrubber_status VARCHAR(20), ADD COLUMN pii_scrubber_error TEXT;
   ```
+  and one created before step 2 started copying text out of PDFs needs the following (steps 2 and
+  `redo_text_layer.py` stop with this command if the column is missing; see also
+  [Redoing records after the text layer change](#redoing-records-after-the-text-layer-change)):
+  ```sql
+  ALTER TABLE transcription_output ADD COLUMN text_source VARCHAR(20);
+  ```
   and one created before step 3 started recording failures needs:
   ```sql
   ALTER TABLE string_replacement_completion
@@ -452,6 +481,65 @@ it, or copy it anywhere it is not supposed to be.
     LEFT JOIN transcription_output o ON o.input_id = i.id
     WHERE o.id IS NULL AND (LOWER(i.input_file) NOT LIKE '%.pdf' OR i.input_file LIKE '%/.!_%' ESCAPE '!');
   ```
+
+## Redoing records after the text layer change
+
+Before issue #82 (November 2026), step 2 read every page with OCR, which gets about 1 number in 11 wrong on pages
+whose PDF holds their exact text. `scripts/redo_text_layer.py` sends those records back through the pipeline, so
+they're done again from their own text. It looks at every PDF step 2 finished before the change (its outputs have
+no `text_source`):
+
+- If at least one of its pages would now be copied out of the PDF, it's **redone**: its rows in
+  `transcription_output` and `string_replacement_completion` are deleted, with the text files they point to (OCR,
+  replaced and scrubbed text, scrubber report), and so are the visit dates step 5 found in it, leaving one empty
+  metadata row with its subject ID. Its `ocr_status` is cleared, so steps 2 to 5 process it again from scratch.
+- Otherwise (a scan, say) it **keeps** its outputs, which are marked `text_source = 'ocr'`.
+
+Each PDF is changed in its own transaction, so it's safe to stop and rerun: it only looks at PDFs it hasn't dealt
+with yet. Most of the time afterwards goes to step 4, which rescrubs every redone file.
+
+**On your own database**, inside the container:
+
+1. Make sure no step is running, and that every step has caught up.
+2. Add the new column, if your database doesn't have it yet (see [the column list](#stopping-restarting-and-starting-over)):
+   `ALTER TABLE transcription_output ADD COLUMN text_source VARCHAR(20);`
+3. See what it would do, without changing anything (use the same `--document-type` as your other steps):
+   ```bash
+   python scripts/redo_text_layer.py --document-type=document --dry-run
+   ```
+   It logs each PDF it would redo and ends with the counts (`All done! Would redo N PDFs; M kept their OCR ...`).
+   On the real records, expect about three-quarters to be redone: 74% of the PDFs were made on a computer
+   throughout, and some others partly.
+4. Back up the database, since this deletes rows (from your own computer):
+   ```bash
+   docker exec vmrt-emr-process-log-mysql sh -c 'mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" vmrt_emr_transcription' > backup-before-redo.sql
+   ```
+   Keep the backup as carefully as the records themselves: it holds their file paths, which have dog and owner
+   names.
+5. Redo them:
+   ```bash
+   python scripts/redo_text_layer.py --document-type=document
+   ```
+6. Run steps 2 to 5 again as usual. They only pick up the redone PDFs. Optionally, run step 2 once with
+   `--retry-failed`: some PDFs that failed OCR (a page too large to render, say) may go through now.
+
+**On Jenkins** (`vmrt-tesseract-pipeline`), the same steps apply to the job's database. Don't use the job's
+`fresh-start`: it drops the database, losing everything the redo works from.
+
+1. Wait for the current build to finish, or stop it, so no step is running.
+2. Make sure the job's checkout has this change (the job runs whatever its branch has; the workspace image itself
+   didn't change).
+3. Add the column to the job's database, in its MySQL container on the Jenkins machine (`vmrt-emr-process-log-mysql`
+   unless the job names it differently; use the job's database name in place of `vmrt_emr_transcription` if it
+   has its own):
+   ```bash
+   docker exec vmrt-emr-process-log-mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" vmrt_emr_transcription \
+     -e "ALTER TABLE transcription_output ADD COLUMN text_source VARCHAR(20);"'
+   ```
+4. Back up that database as in step 4 above.
+5. Run `redo_text_layer.py` with `--dry-run`, then for real, in the workspace image the way the job runs its steps
+   (same network, `SQL_CONNECTION_STRING`, `/data` mount and `--document-type`), and check the counts it ends with.
+6. Start a normal build. Steps 2 to 5 pick up the redone PDFs; everything else is skipped as already done.
 
 ## Reference data files
 

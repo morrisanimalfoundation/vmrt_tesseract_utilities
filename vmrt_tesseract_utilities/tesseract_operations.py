@@ -4,16 +4,24 @@ import re
 import shutil
 import subprocess
 from abc import ABC, abstractmethod
-from typing import Iterator
+from collections import Counter
+from typing import Iterator, Optional
 
 import pdf2image
 import tesserocr
 from PIL import Image
 
 from vmrt_tesseract_utilities.logging import stdout_logger
+from vmrt_tesseract_utilities.text_layer import (PageText, TextLayerError,
+                                                 read_pages)
 
 """
 Provides Tesseract processing with different output scales (document, page, block).
+
+A page whose PDF already holds its text (a born-digital page) takes that text instead of being read with OCR, unless
+the operation is made with `ocr_only=True`; see `vmrt_tesseract_utilities.text_layer` for which pages qualify. Each
+result says where its text came from, in 'source': SOURCE_TEXT_LAYER, SOURCE_OCR, or, for a whole document read
+both ways, SOURCE_MIXED. Text from the text layer has no OCR confidence, so its 'confidence' is None.
 """
 
 TESSDATA_PATH = '/usr/share/tessdata'
@@ -41,6 +49,10 @@ MAX_PAGE_SIDE = 32_767
 # text.
 MIN_RENDER_DPI = 50
 POINTS_PER_INCH = 72
+# Where a result's text came from (its 'source').
+SOURCE_TEXT_LAYER = 'text_layer'
+SOURCE_OCR = 'ocr'
+SOURCE_MIXED = 'mixed'
 
 
 class NoTextFoundError(Exception):
@@ -78,10 +90,10 @@ def check_ocr_setup(tessdata_path: str = TESSDATA_PATH) -> None:
     OcrSetupError
       If poppler isn't installed, a Tesseract model is missing, or Tesseract can't start with the given tessdata.
     """
-    missing = [tool for tool in ('pdfinfo', 'pdftoppm') if shutil.which(tool) is None]
+    missing = [tool for tool in ('pdfinfo', 'pdftoppm', 'pdftotext', 'pdfimages') if shutil.which(tool) is None]
     if missing:
         raise OcrSetupError(f'Poppler is not installed or not on PATH (missing {", ".join(missing)}). '
-                            'pdf2image needs it to read PDFs.')
+                            'pdf2image needs it to read PDFs, and the text layer is read with it.')
     if not os.path.isdir(tessdata_path):
         raise OcrSetupError(f'Tesseract data directory {tessdata_path} does not exist.')
     # Without the osd model, Tesseract only warns and reads rotated pages as garbage, so check for it here.
@@ -158,20 +170,58 @@ class TesseractOperationBase(ABC):
     """
     A base operation class for further use.
 
+    Parameters
+    ----------
+    ocr_only : bool
+        Read every page with OCR, even pages whose PDF holds their text, as before issue #82.
+
     Notes
     -----
     `process_row` raises on failure rather than returning an empty list, so the caller can record it. A file
     that fails part way through therefore saves nothing, rather than its first pages as if they were all of it.
     """
 
+    def __init__(self, ocr_only: bool = False):
+        self.ocr_only = ocr_only
+
     @abstractmethod
     def process_row(self, input_path: str) -> list:
         pass
 
-    @staticmethod
-    def _iter_pages(input_path: str) -> Iterator[tuple[int, Image.Image]]:
+    def _text_layer_pages(self, input_path: str) -> dict[int, PageText]:
         """
-        Renders a PDF one page at a time, so only a single page image is held in memory.
+        Finds the pages whose text layer is used instead of OCR, and logs how the file's pages will be read.
+
+        Parameters
+        ----------
+        input_path: str
+          The path to the PDF.
+
+        Returns
+        -------
+        dict[int, PageText]
+          Page number, from 1, to the page's text layer. Empty with `ocr_only`, or if poppler can't read the file's
+          text layer, in which case every page is read with OCR (and any real problem with the file shows up there).
+        """
+        if self.ocr_only:
+            return {}
+        try:
+            pages = read_pages(input_path)
+        except TextLayerError as e:
+            stdout_logger.warning(f'Item {input_path}: its text layer could not be read, so every page is read with '
+                                  f'OCR: {e}')
+            return {}
+        used = {page.page: page for page in pages if page.use_text_layer}
+        reasons = Counter(page.ocr_reason.split(':')[0] for page in pages if not page.use_text_layer)
+        why = f' ({", ".join(f"{reason} {n}" for reason, n in reasons.most_common())})' if reasons else ''
+        stdout_logger.info(f'Item {input_path}: {len(used)} of {len(pages)} pages read from the text layer, '
+                           f'{len(pages) - len(used)} with OCR{why}.')
+        return used
+
+    def _iter_pages(self, input_path: str) -> Iterator[tuple[int, Optional[Image.Image], Optional[PageText]]]:
+        """
+        Goes through a PDF one page at a time: a page whose text layer is used is given as is, and any other page is
+        rendered, so only a single page image is held in memory.
 
         Pages stay in colour: rendering them in greyscale with poppler gives slightly different OCR text and
         confidence scores on colour scans than letting Tesseract do the conversion.
@@ -188,19 +238,24 @@ class TesseractOperationBase(ABC):
 
         Yields
         ------
-        page_index, image: tuple[int, Image.Image]
-          The zero-based page index and the rendered page.
+        page_index, image, text_layer: tuple[int, Image.Image | None, PageText | None]
+          The zero-based page index, and either the page's text layer or the rendered page.
         """
+        text_layer = self._text_layer_pages(input_path)
         page_count = pdf2image.pdfinfo_from_path(input_path)['Pages']
         stdout_logger.info(f'Item {input_path} has {page_count} pages.')
-        sizes = page_sizes(input_path, page_count)
+        # Only the pages read with OCR need their size, to choose the resolution to render them at.
+        sizes = page_sizes(input_path, page_count) if len(text_layer) < page_count else {}
         for pg in range(page_count):
+            if pg + 1 in text_layer:
+                yield pg, None, text_layer[pg + 1]
+                continue
             dpi = TesseractOperationBase._render_dpi(input_path, pg + 1, sizes.get(pg + 1))
             images = pdf2image.convert_from_path(input_path, dpi=dpi, first_page=pg + 1, last_page=pg + 1)
             image = images[0]
             del images
             try:
-                yield pg, image
+                yield pg, image, None
             finally:
                 # Also runs if the caller stops part way through, e.g. because OCR on this page failed.
                 image.close()
@@ -412,19 +467,30 @@ class TesseractOperationDoc(TesseractOperationBase):
     Returns Tesseract results for entire documents.
     """
     def process_row(self, input_path: str) -> list:
+        """
+        Reads the whole PDF into one result. Its confidence is the mean of the pages read with OCR, or None if every
+        page came from the text layer.
+        """
         confidence_scores = []
+        sources = set()
         document_content = ''
         with self._open_api() as api, self._open_osd_api() as osd_api:
-            for pg, image in self._iter_pages(input_path):
+            for pg, image, text_layer in self._iter_pages(input_path):
+                if text_layer is not None:
+                    document_content += "\n" + text_layer.text
+                    sources.add(SOURCE_TEXT_LAYER)
+                    continue
                 ocr_result, confidence = self._read_page(api, osd_api, image)
                 if ocr_result.strip() and confidence > 0:
                     document_content += "\n" + ocr_result
                     confidence_scores.append(confidence)
-        if not confidence_scores:
+                    sources.add(SOURCE_OCR)
+        if not sources:
             raise NoTextFoundError(f'No recognizable text found in {input_path}.')
-        doc_confidence = sum(confidence_scores) / len(confidence_scores)
+        doc_confidence = sum(confidence_scores) / len(confidence_scores) if confidence_scores else None
         stdout_logger.info(f'Item {input_path} had a confidence score of {doc_confidence}.')
-        return [{'content': document_content, 'confidence': doc_confidence, 'page': 1, 'block': 1}]
+        source = sources.pop() if len(sources) == 1 else SOURCE_MIXED
+        return [{'content': document_content, 'confidence': doc_confidence, 'page': 1, 'block': 1, 'source': source}]
 
 
 class TesseractOperationPage(TesseractOperationBase):
@@ -434,10 +500,15 @@ class TesseractOperationPage(TesseractOperationBase):
     def process_row(self, input_path: str) -> list:
         output = []
         with self._open_api() as api, self._open_osd_api() as osd_api:
-            for pg, image in self._iter_pages(input_path):
+            for pg, image, text_layer in self._iter_pages(input_path):
+                if text_layer is not None:
+                    output.append({'content': text_layer.text, 'confidence': None, 'page': pg + 1, 'block': 0,
+                                   'source': SOURCE_TEXT_LAYER})
+                    continue
                 ocr_result, page_confidence = self._read_page(api, osd_api, image)
                 print(f'Item {input_path}:{pg} had a confidence score of {page_confidence}.')
-                output.append({'content': ocr_result, 'confidence': page_confidence, 'page': pg + 1, 'block': 0})
+                output.append({'content': ocr_result, 'confidence': page_confidence, 'page': pg + 1, 'block': 0,
+                               'source': SOURCE_OCR})
         if not any(result['content'].strip() for result in output):
             raise NoTextFoundError(f'No recognizable text found in {input_path}.')
         return output
@@ -451,7 +522,7 @@ class TesseractOperationBlock(TesseractOperationBase):
     -----
     Each block is one line of text. Each page is recognised once, as in page mode, and the result is split into
     the lines Tesseract found, so block mode has the same words as page mode. Lines with no text (such as image
-    regions) are left out.
+    regions) are left out. A page read from its text layer is split into its lines the same way.
 
     Reading each line again from a box cropped around it gave worse results on real records: boxes cut tight to
     the text often came back empty, padded boxes picked up neighbouring lines in densely typed records, and the
@@ -462,10 +533,17 @@ class TesseractOperationBlock(TesseractOperationBase):
         output = []
         level = tesserocr.RIL.TEXTLINE
         with self._open_api() as api, self._open_osd_api() as osd_api:
-            for pg, image in self._iter_pages(input_path):
+            for pg, image, text_layer in self._iter_pages(input_path):
+                block = 0
+                if text_layer is not None:
+                    for line in text_layer.text.splitlines():
+                        if line.strip():
+                            block += 1
+                            output.append({'content': line.strip() + '\n', 'confidence': None, 'page': pg + 1,
+                                           'block': block, 'source': SOURCE_TEXT_LAYER})
+                    continue
                 # Recognises the page (turned upright if needed), so its lines can be iterated below.
                 self._read_page(api, osd_api, image)
-                block = 0
                 for line in tesserocr.iterate_level(api.GetIterator(), level):
                     ocr_result = line.GetUTF8Text(level) or ''
                     if not ocr_result.strip():
@@ -473,7 +551,8 @@ class TesseractOperationBlock(TesseractOperationBase):
                     block += 1
                     line_confidence = line.Confidence(level)
                     print(f'Item {input_path}:{pg}:{block} had a confidence score of {line_confidence}.')
-                    output.append({'content': ocr_result, 'confidence': line_confidence, 'page': pg + 1, 'block': block})
+                    output.append({'content': ocr_result, 'confidence': line_confidence, 'page': pg + 1, 'block': block,
+                                   'source': SOURCE_OCR})
         if not any(result['content'].strip() for result in output):
             raise NoTextFoundError(f'No recognizable text found in {input_path}.')
         return output

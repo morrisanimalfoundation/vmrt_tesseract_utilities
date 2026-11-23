@@ -5,7 +5,8 @@ Each pipeline step reads the previous step's results from the database, so packa
 pdf2image, poppler, Tesseract, presidio) can break the hand-off between steps without any single step failing on its
 own. This script generates synthetic records for made-up dogs, runs the five steps from the README's "Running the
 pipeline" section exactly as a user would, in both document and page mode, and then checks the database and the
-files the steps wrote.
+files the steps wrote. One record is born digital, so its text comes from the PDF rather than OCR (#82). Afterwards,
+it redoes document mode as if it had been run before #82, with scripts/redo_text_layer.py, and checks again.
 
 Run it inside the workspace image, with SQL_CONNECTION_STRING pointing at an empty MySQL database, for example:
 
@@ -29,11 +30,11 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
-from typing import List, Set, Tuple
+from typing import List, Set, Tuple, Union
 
 import sqlalchemy
 
-from tests.synthetic_pdfs import SyntheticPage, write_pdf
+from tests.synthetic_pdfs import DigitalPage, SyntheticPage, write_pdf
 from vmrt_tesseract_utilities.database import (Base, TranscriptionInput,
                                                TranscriptionMetadata,
                                                TranscriptionOutput,
@@ -55,17 +56,24 @@ class Record:
     ----------
     filename : str
         The PDF's name inside its dog's folder.
-    pages : List[SyntheticPage]
-        The pages.
+    pages : List[SyntheticPage | DigitalPage]
+        The pages: scanned, or born digital.
     visit_dates : Set[Tuple[str, str]]
         The (visit date from vet_visits.tsv, date written in the record) pairs the miner should find, as ISO dates.
     ocr_must_read : List[str]
         Other text that must be in the record's OCR output, such as the text of a page scanned sideways.
     """
     filename: str
-    pages: List[SyntheticPage]
+    pages: List[Union[SyntheticPage, DigitalPage]]
     visit_dates: Set[Tuple[str, str]]
     ocr_must_read: List[str] = field(default_factory=list)
+
+    def page_sources(self) -> List[str]:
+        """
+        Where each page's text should come from: a plain born-digital page's from its text layer, the rest by OCR.
+        """
+        return ['text_layer' if isinstance(page, DigitalPage) and page.image is None and not page.garbled else 'ocr'
+                for page in self.pages]
 
 
 @dataclass
@@ -116,6 +124,18 @@ def make_dogs() -> List[Dog]:
                 'Recheck of dental tartar. Mild improvement.',
             ], font_size=31),
         ], {('2024-03-20', '2024-03-21')}),
+        # Printed to PDF by the clinic's software, so its first page's text comes from the PDF itself, laid out in
+        # columns as pdftotext -layout keeps them. The signed consent form was scanned in after it.
+        Record('2025-01-10 vaccines.pdf', [
+            DigitalPage(record_header(biscuit, 'Margaret Thompson', '541-555-0163') + [
+                'Visit date: January 10, 2025',
+                ('Vaccine', 'Date given', 'Next due'),
+                ('Rabies', '01/10/2025', '01/10/2028'),
+                ('DHPP', '01/10/2025', '01/10/2026'),
+                'Seen by Dr. Alan Whitaker.',
+            ]),
+            SyntheticPage(['Consent signed by owner.', 'Vaccine lot numbers on file.'], font_size=31),
+        ], {('2025-01-10', '2025-01-10')}, ocr_must_read=['Rabies', 'Consent signed by owner']),
     ]
     juniper.records = [
         Record('2023-07-02 exam.pdf', [
@@ -268,6 +288,7 @@ def check_results(document_type: str, dogs: List[Dog], data_dir: str) -> List[st
                 problems.append(f'{name}: {len(outputs)} outputs, expected {expected_outputs}')
             for output in outputs:
                 problems.extend(check_output(f'{name} output {output.id}', output, dog))
+            problems.extend(check_sources(name, document_type, outputs, record))
             problems.extend(check_ocr_read(name, outputs, dog, record))
 
             # The visit dates the miner matched, ignoring the registration row that has none.
@@ -281,6 +302,67 @@ def check_results(document_type: str, dogs: List[Dog], data_dir: str) -> List[st
             subject_ids = {m.subject_id for m in input_row.derived_metadata}
             if subject_ids != {dog.subject_id}:
                 problems.append(f'{name}: metadata subject IDs {subject_ids}, expected {dog.subject_id}')
+    return problems
+
+
+def check_sources(name: str, document_type: str, outputs: List[TranscriptionOutput], record: Record) -> List[str]:
+    """
+    Checks that each output says where its text came from, and that text from the text layer has no confidence.
+    """
+    sources = record.page_sources()
+    if document_type == 'document':
+        expected = [sources[0] if len(set(sources)) == 1 else 'mixed']
+    else:
+        expected = sources
+    found = [o.text_source for o in sorted(outputs, key=lambda o: o.id)]
+    problems = [f'{name}: text sources {found}, expected {expected}'] if found != expected else []
+    for output in outputs:
+        if (output.ocr_confidence is None) != (output.text_source == 'text_layer'):
+            problems.append(f'{name} output {output.id}: text source {output.text_source!r} with confidence '
+                            f'{output.ocr_confidence}')
+    return problems
+
+
+def redo_as_before_82(output_dir: str) -> List[str]:
+    """
+    Makes document mode look as if it had been transcribed before #82 (no text_source), and redoes it with
+    redo_text_layer.py: a dry run first, which must change nothing, then the real thing.
+
+    Returns
+    -------
+    list of str
+        The problems found; empty if there are none.
+    """
+    problems = []
+    with get_database_session()() as session:
+        outputs = (session.query(TranscriptionOutput).join(TranscriptionInput)
+                   .filter(TranscriptionInput.document_type == 'document').all())
+        for output in outputs:
+            output.text_source = None
+        session.commit()
+
+    def snapshot():
+        with get_database_session()() as session:
+            return sorted((i.input_file, i.ocr_status, len(i.assets), len(i.derived_metadata))
+                          for i in session.query(TranscriptionInput).filter(TranscriptionInput.document_type == 'document'))
+
+    before = snapshot()
+    run('scripts/redo_text_layer.py', '--document-type=document', '--dry-run')
+    if snapshot() != before:
+        problems.append('redo --dry-run changed the database')
+    run('scripts/redo_text_layer.py', '--document-type=document')
+    with get_database_session()() as session:
+        for db_input in session.query(TranscriptionInput).filter(TranscriptionInput.document_type == 'document'):
+            # Only the born-digital record is reset: no outputs, one empty metadata row, not transcribed yet.
+            # The scanned ones keep their one document output, now marked as read with OCR.
+            if db_input.input_file.endswith('vaccines.pdf'):
+                state = (db_input.ocr_status, len(db_input.assets), [m.visit_date for m in db_input.derived_metadata])
+                expected = (None, 0, [None])
+            else:
+                state = (db_input.ocr_status, [o.text_source for o in db_input.assets])
+                expected = ('success', ['ocr'])
+            if state != expected:
+                problems.append(f'redo: {db_input.input_file} is {state}, expected {expected}')
     return problems
 
 
@@ -345,6 +427,12 @@ def main() -> int:
         for document_type in DOCUMENT_TYPES:
             run_pipeline(document_type, data_dir, output_dir, profile_tsv, visits_tsv)
             problems.extend(check_results(document_type, dogs, data_dir))
+        # As the README says to after #82: redo, then run every step again.
+        redo_problems = redo_as_before_82(output_dir)
+        problems.extend(redo_problems)
+        if not redo_problems:
+            run_pipeline('document', data_dir, output_dir, profile_tsv, visits_tsv)
+            problems.extend(f'after redo: {p}' for p in check_results('document', dogs, data_dir))
     elapsed = (datetime.datetime.now() - started).total_seconds()
     if problems:
         print(f'\nPipeline test FAILED after {elapsed:.0f} seconds:', *problems, sep='\n- ')

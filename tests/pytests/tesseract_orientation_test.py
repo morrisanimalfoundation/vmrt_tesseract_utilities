@@ -97,7 +97,7 @@ def test_every_mode_reads_pages_through_the_orientation_check(monkeypatch):
     monkeypatch.setattr(tesseract_operations.TesseractOperationBase, '_read_page',
                         lambda self, api, osd_api, image: reads.append(type(self).__name__) or ('Text', 90))
     monkeypatch.setattr(tesseract_operations.TesseractOperationBase, '_iter_pages',
-                        staticmethod(lambda path: iter([(0, mock.MagicMock())])))
+                        lambda self, path: iter([(0, mock.MagicMock(), None)]))
     monkeypatch.setattr(tesseract_operations.tesserocr, 'PyTessBaseAPI', mock.MagicMock())
     monkeypatch.setattr(tesseract_operations.tesserocr, 'iterate_level', lambda iterator, level: [])
     for operation in (tesseract_operations.TesseractOperationDoc(), TesseractOperationPage(),

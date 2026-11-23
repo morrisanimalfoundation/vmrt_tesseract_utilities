@@ -42,18 +42,58 @@ def _fake_process_row(self, input_path):
         raise NoTextFoundError('No recognizable text found in blank.pdf.')
     if input_path == 'broken.pdf':
         raise ValueError('Unable to get page count.')
-    return [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1}]
+    return [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1, 'source': 'ocr'}]
 
 
 def _run(tmp_path, retry_failed=False, shard=None, document_type='document', offset=0):
     args = argparse.Namespace(output_to=str(tmp_path), document_type=document_type, chunk_size=10,
-                              offset=offset, retry_failed=retry_failed, shard=shard, debug_sql=False)
+                              offset=offset, retry_failed=retry_failed, shard=shard, debug_sql=False,
+                              ocr_only=False)
     return transcribe_pdfs.run_tesseract(args)
 
 
 def _statuses(engine) -> dict:
     with Session(engine) as session:
         return {i.input_file: (i.ocr_status, i.ocr_error) for i in session.query(TranscriptionInput)}
+
+
+def test_text_source_and_missing_confidence_are_saved(monkeypatch, tmp_path, engine):
+    """
+    Test that each output row records where its text came from, and that text from the text layer is saved with
+    no confidence.
+
+    Asserts:
+        The rows have the results' text_source and ocr_confidence, None included.
+    """
+    results = [{'content': 'Exam', 'confidence': None, 'page': 1, 'block': 0, 'source': 'text_layer'},
+               {'content': 'Scan', 'confidence': 88, 'page': 2, 'block': 0, 'source': 'ocr'}]
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationPage, 'process_row', lambda self, path: results)
+    with Session(engine) as session:
+        session.query(TranscriptionInput).update({'document_type': 'page'})
+        session.commit()
+    _run(tmp_path, document_type='page')
+    with Session(engine) as session:
+        rows = {(o.transcription_input.input_file, o.ocr_output_file.rsplit('-', 2)[1]): (o.text_source, o.ocr_confidence)
+                for o in session.query(TranscriptionOutput)}
+    assert rows[('good.pdf', '1')] == ('text_layer', None)
+    assert rows[('good.pdf', '2')] == ('ocr', 88)
+
+
+@pytest.mark.parametrize('ocr_only', [False, True])
+def test_ocr_only_reaches_the_operation(monkeypatch, tmp_path, engine, ocr_only):
+    """
+    Test that --ocr-only makes the operation read every page with OCR.
+
+    Asserts:
+        The operation that reads each file was made with the run's ocr_only.
+    """
+    seen = []
+    monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row',
+                        lambda self, path: seen.append(self.ocr_only) or _fake_process_row(self, path))
+    args = argparse.Namespace(output_to=str(tmp_path), document_type='document', chunk_size=10, offset=0,
+                              retry_failed=False, shard=None, debug_sql=False, ocr_only=ocr_only)
+    transcribe_pdfs.run_tesseract(args)
+    assert seen == [ocr_only] * 3
 
 
 def test_run_tesseract_skips_failures_and_summarizes(monkeypatch, tmp_path, caplog, engine):
@@ -94,7 +134,7 @@ def test_write_error_is_recorded_as_a_failure(monkeypatch, tmp_path, caplog, eng
         raise PermissionError(f'Permission denied: {output_path}')
 
     monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row',
-                        lambda self, path: [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1}])
+                        lambda self, path: [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1, 'source': 'ocr'}])
     monkeypatch.setattr(transcribe_pdfs, '_write_file', unwritable)
     with caplog.at_level(logging.INFO, logger='import_utility'):
         _run(tmp_path)
@@ -122,7 +162,7 @@ def test_failed_files_are_only_retried_when_asked(monkeypatch, tmp_path, engine)
 
     def recording_process_row(self, input_path):
         seen.append(input_path)
-        return [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1}]
+        return [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1, 'source': 'ocr'}]
 
     monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', recording_process_row)
     _run(tmp_path)
@@ -149,7 +189,7 @@ def _killed_on(*paths, calls=None):
             calls.append(input_path)
         if input_path in paths:
             raise _Killed()
-        return [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1}]
+        return [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1, 'source': 'ocr'}]
     return process_row
 
 
@@ -164,7 +204,7 @@ def test_pdf_is_marked_started_before_ocr(monkeypatch, tmp_path, engine):
 
     def checking_process_row(self, input_path):
         seen[input_path] = _statuses(engine)[input_path][0]
-        return [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1}]
+        return [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1, 'source': 'ocr'}]
 
     monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', checking_process_row)
     _run(tmp_path)
@@ -257,7 +297,7 @@ def test_retrying_a_failed_pdf_clears_its_old_error(monkeypatch, tmp_path, engin
 
     def checking_process_row(self, input_path):
         seen[input_path] = _statuses(engine)[input_path]
-        return [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1}]
+        return [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1, 'source': 'ocr'}]
 
     monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row', checking_process_row)
     _run(tmp_path, retry_failed=True)
@@ -302,7 +342,7 @@ def test_setup_error_stops_run_before_any_file(monkeypatch, tmp_path, engine):
 def _recorder(seen):
     def recording_process_row(self, input_path):
         seen.append(input_path)
-        return [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1}]
+        return [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1, 'source': 'ocr'}]
     return recording_process_row
 
 
@@ -447,7 +487,7 @@ def test_page_inputs_keep_all_their_pages_in_one_shard(monkeypatch, tmp_path):
 
     def two_pages(self, input_path):
         seen.append(input_path)
-        return [{'content': f'page {page}', 'confidence': 90, 'page': page, 'block': 1} for page in (1, 2)]
+        return [{'content': f'page {page}', 'confidence': 90, 'page': page, 'block': 1, 'source': 'ocr'} for page in (1, 2)]
 
     monkeypatch.setattr(transcribe_pdfs.TesseractOperationPage, 'process_row', two_pages)
     _run(tmp_path, shard=(0, 2), document_type='page')
@@ -543,7 +583,7 @@ def test_main_exits_with_0_when_every_file_is_transcribed(monkeypatch, tmp_path,
         Every file is saved as a success and the exit code is 0.
     """
     monkeypatch.setattr(transcribe_pdfs.TesseractOperationDoc, 'process_row',
-                        lambda self, path: [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1}])
+                        lambda self, path: [{'content': 'text', 'confidence': 90, 'page': 1, 'block': 1, 'source': 'ocr'}])
     assert _main(monkeypatch, tmp_path) == 0
     assert {status for status, _ in _statuses(engine).values()} == {'success'}
 
@@ -601,16 +641,16 @@ def test_main_doesnt_count_a_pdf_cut_short_twice(monkeypatch, tmp_path, caplog, 
 
 @pytest.mark.parametrize('mode, results', [
     ('page', [
-        {'content': 'Page one', 'confidence': 91.0, 'page': 1, 'block': 0},
-        {'content': 'Page two', 'confidence': 92.0, 'page': 2, 'block': 0},
+        {'content': 'Page one', 'confidence': 91.0, 'page': 1, 'block': 0, 'source': 'ocr'},
+        {'content': 'Page two', 'confidence': 92.0, 'page': 2, 'block': 0, 'source': 'ocr'},
     ]),
     ('block', [
-        {'content': 'P1 block 1', 'confidence': 81.0, 'page': 1, 'block': 1},
-        {'content': 'P1 block 2', 'confidence': 82.0, 'page': 1, 'block': 2},
-        {'content': 'P1 block 3', 'confidence': 83.0, 'page': 1, 'block': 3},
-        {'content': 'P2 block 1', 'confidence': 84.0, 'page': 2, 'block': 1},
-        {'content': 'P2 block 2', 'confidence': 85.0, 'page': 2, 'block': 2},
-        {'content': 'P2 block 3', 'confidence': 86.0, 'page': 2, 'block': 3},
+        {'content': 'P1 block 1', 'confidence': 81.0, 'page': 1, 'block': 1, 'source': 'ocr'},
+        {'content': 'P1 block 2', 'confidence': 82.0, 'page': 1, 'block': 2, 'source': 'ocr'},
+        {'content': 'P1 block 3', 'confidence': 83.0, 'page': 1, 'block': 3, 'source': 'ocr'},
+        {'content': 'P2 block 1', 'confidence': 84.0, 'page': 2, 'block': 1, 'source': 'ocr'},
+        {'content': 'P2 block 2', 'confidence': 85.0, 'page': 2, 'block': 2, 'source': 'ocr'},
+        {'content': 'P2 block 3', 'confidence': 86.0, 'page': 2, 'block': 3, 'source': 'ocr'},
     ]),
 ])
 @pytest.mark.parametrize('has_existing_empty_row', [False, True])

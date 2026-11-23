@@ -323,12 +323,15 @@ def _run(args: list[str], input_path: str) -> str:
     Raises
     ------
     TextLayerError
-        If it fails or takes longer than TOOL_TIMEOUT.
+        If it can't be run, fails, or takes longer than TOOL_TIMEOUT.
     """
     try:
         done = subprocess.run(args, capture_output=True, timeout=TOOL_TIMEOUT)
     except subprocess.TimeoutExpired:
         raise TextLayerError(f'{args[0]} took longer than {TOOL_TIMEOUT} seconds on {input_path}.')
+    except OSError as e:
+        # Poppler isn't installed (outside the Docker image) or can't be run.
+        raise TextLayerError(f'{args[0]} could not be run on {input_path}: {e}') from e
     if done.returncode != 0:
         error = done.stderr.decode('utf-8', 'replace').strip()[:500]
         raise TextLayerError(f'{args[0]} exited with code {done.returncode} on {input_path}: {error}')

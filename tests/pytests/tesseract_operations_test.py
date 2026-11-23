@@ -19,8 +19,7 @@ if shutil.which('pdfinfo') is None or not os.path.isdir('/usr/share/tessdata'):
 from tests.synthetic_pdfs import SyntheticPage, write_pdf  # noqa: E402
 from vmrt_tesseract_utilities import tesseract_operations  # noqa: E402
 from vmrt_tesseract_utilities.tesseract_operations import (  # noqa: E402
-    TesseractOperationBase, TesseractOperationBlock, TesseractOperationDoc,
-    TesseractOperationPage)
+    TesseractOperationBlock, TesseractOperationDoc, TesseractOperationPage)
 
 PAGE_LINES = [
     ['Vaccines current', 'Weight 32 kg'],
@@ -73,7 +72,7 @@ def test_large_page_is_rendered_within_pixel_limit(pdf_path, monkeypatch):
     The limit is lowered so the synthetic letter-size pages count as too large, which keeps the test fast.
     """
     monkeypatch.setattr(tesseract_operations, 'MAX_PAGE_PIXELS', 1_000_000)
-    sizes = [image.size for _, image in TesseractOperationBase._iter_pages(pdf_path)]
+    sizes = [image.size for _, image, _ in TesseractOperationPage()._iter_pages(pdf_path)]
     assert all(width * height <= 1_000_000 for width, height in sizes)
     # About 100 dpi rather than 200: 1700 x 2200 pixels.
     assert all(800 < width < 900 for width, _ in sizes)
@@ -91,7 +90,7 @@ def test_long_page_is_rendered_within_side_limit(pdf_path, monkeypatch):
     The limit is lowered so the synthetic letter-size pages count as too long, which keeps the test fast.
     """
     monkeypatch.setattr(tesseract_operations, 'MAX_PAGE_SIDE', 1500)
-    sizes = [image.size for _, image in TesseractOperationBase._iter_pages(pdf_path)]
+    sizes = [image.size for _, image, _ in TesseractOperationPage()._iter_pages(pdf_path)]
     assert all(max(width, height) <= 1500 for width, height in sizes)
     output = TesseractOperationDoc().process_row(pdf_path)
     for lines in PAGE_LINES:
