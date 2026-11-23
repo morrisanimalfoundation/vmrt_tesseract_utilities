@@ -25,7 +25,7 @@ def engine(monkeypatch, tmp_path):
 
     The OCR setup check is skipped, since poppler and Tesseract aren't installed in CI.
     """
-    monkeypatch.setattr(transcribe_pdfs, 'check_ocr_setup', lambda: None)
+    monkeypatch.setattr(transcribe_pdfs, 'check_ocr_setup', lambda **_: None)
     db_url = f'sqlite:///{tmp_path}/test.db'
     monkeypatch.setenv('SQL_CONNECTION_STRING', db_url)
     engine = create_engine(db_url)
@@ -326,7 +326,7 @@ def test_setup_error_stops_run_before_any_file(monkeypatch, tmp_path, engine):
     Asserts:
         OcrSetupError is raised, no file is processed, and no file is marked as failed.
     """
-    def broken_setup():
+    def broken_setup(**_):
         raise OcrSetupError('Poppler is not installed or not on PATH (missing pdfinfo).')
 
     def unexpected_process_row(self, input_path):
@@ -437,7 +437,7 @@ def _shard_database(monkeypatch, tmp_path, document_type, count):
     """
     A SQLite database with `count` PDFs of one document type waiting to be transcribed, IDs 1 to `count`.
     """
-    monkeypatch.setattr(transcribe_pdfs, 'check_ocr_setup', lambda: None)
+    monkeypatch.setattr(transcribe_pdfs, 'check_ocr_setup', lambda **_: None)
     db_url = f'sqlite:///{tmp_path}/shards.db'
     monkeypatch.setenv('SQL_CONNECTION_STRING', db_url)
     engine = create_engine(db_url)
@@ -607,7 +607,7 @@ def test_main_exits_with_1_when_ocr_is_not_set_up(monkeypatch, tmp_path, engine)
     Asserts:
         The exit code is 1, and no file is marked as failed.
     """
-    def missing_poppler():
+    def missing_poppler(**_):
         raise OcrSetupError('Poppler is not installed or not on PATH (missing pdfinfo).')
 
     monkeypatch.setattr(transcribe_pdfs, 'check_ocr_setup', missing_poppler)

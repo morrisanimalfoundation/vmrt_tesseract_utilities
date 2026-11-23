@@ -181,14 +181,14 @@ def run_tesseract(args: argparse.Namespace) -> tuple[int, list[tuple[str, str]]]
     base_path = _get_and_create_output_directory(args)
     if args.document_type not in ('document', 'page', 'block',):
         raise ValueError("'--document-type' must be either 'document', 'page' or 'block'")
-    check_ocr_setup()
+    check_ocr_setup(text_layer=not args.ocr_only)
     stdout_logger.info(f'Here we go with document type: {args.document_type}')
     operation = {'document': TesseractOperationDoc, 'page': TesseractOperationPage, 'block': TesseractOperationBlock}
     op = operation[args.document_type](ocr_only=args.ocr_only)
     if args.ocr_only:
         stdout_logger.info('Reading every page with OCR (--ocr-only), even pages whose PDF holds their text.')
     sessionmaker = get_database_session(echo=args.debug_sql)
-    check_text_source_column(sessionmaker.kw['bind'])
+    check_text_source_column(sessionmaker)
     with sessionmaker() as session:
         query = (session.query(TranscriptionInput, TranscriptionOutput)
                  .outerjoin(TranscriptionInput.assets)

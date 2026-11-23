@@ -286,7 +286,7 @@ for backwards compatibility, so existing scripts and commands keep working. Use 
 | `replace_strings.py` | `--document-type` | `--chunk-size` | — | `--debug-sql` | `--max-workers`, `--no-multiprocessing`, `--until-done`, `--retry-failed` |
 | `pii_scrubber.py` | `--document-type` | `--chunk-size` | `--offset` | `--debug-sql` | `--threshold`, `--config`, `--until-done`, `--retry-failed`, `--max-failure-rate` |
 | `visit_date_miner.py` | — | `--chunk-size` | `--offset` | `--debug-sql` | `--visit-date-threshold`, `--search-unstructured-text-dir` |
-| `redo_text_layer.py` | `--document-type` | `--chunk-size` | — | `--debug-sql` | `--dry-run`, `--workers` (see [Redoing records after the text layer change](#redoing-records-after-the-text-layer-change)) |
+| `redo_text_layer.py` | `--document-type` | `--chunk-size` | — | `--debug-sql` | `--dry-run`, `--workers`, `--keep-unreadable` (see [Redoing records after the text layer change](#redoing-records-after-the-text-layer-change)) |
 
 - **Document type** (`document`, `page`, or `block`; default `document`) controls how finely the OCR output
   is split: one text file per PDF, one per page, or one per detected line of text. Whatever you choose in
@@ -493,10 +493,18 @@ no `text_source`):
   `transcription_output` and `string_replacement_completion` are deleted, with the text files they point to (OCR,
   replaced and scrubbed text, scrubber report), and so are the visit dates step 5 found in it, leaving one empty
   metadata row with its subject ID. Its `ocr_status` is cleared, so steps 2 to 5 process it again from scratch.
-- Otherwise (a scan, say) it **keeps** its outputs, which are marked `text_source = 'ocr'`.
+- Otherwise (a scan, say) it **keeps** its outputs, which are marked `text_source = 'ocr'`. So does a damaged PDF
+  whose text layer poppler can't read, since step 2 would read every page with OCR too.
+- If poppler took too long on a PDF or was killed, the PDF is left as it is, so the next run checks it again. The
+  summary counts these (`N left to check again`). If they still can't be read, add `--keep-unreadable` to keep their
+  OCR, so the redo can finish.
 
 Each PDF is changed in its own transaction, so it's safe to stop and rerun: it only looks at PDFs it hasn't dealt
 with yet. Most of the time afterwards goes to step 4, which rescrubs every redone file.
+
+Run it from the directory step 2 was run from (`/workspace` in the container): it deletes the old text files by the
+paths in the database, so a path step 2 stored relative to its directory is only found from there. The summary warns
+about any old file it couldn't find.
 
 **On your own database**, inside the container:
 

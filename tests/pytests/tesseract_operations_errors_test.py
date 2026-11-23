@@ -236,6 +236,17 @@ def test_check_ocr_setup_missing_text_layer_tools(monkeypatch):
         check_ocr_setup()
 
 
+def test_check_ocr_setup_ocr_only_needs_no_text_layer_tools(monkeypatch):
+    """
+    Test that with --ocr-only, which never reads the text layer, poppler without its text tools is fine.
+
+    Asserts:
+        No error is raised.
+    """
+    _fake_setup(monkeypatch, tools=('pdfinfo', 'pdftoppm'))
+    check_ocr_setup(text_layer=False)
+
+
 def test_check_ocr_setup_missing_tessdata(monkeypatch):
     """
     Test that a missing tessdata directory stops the run with a clear error.

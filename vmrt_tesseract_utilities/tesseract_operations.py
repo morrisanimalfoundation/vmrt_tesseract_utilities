@@ -76,7 +76,7 @@ class OcrSetupError(Exception):
     pass
 
 
-def check_ocr_setup(tessdata_path: str = TESSDATA_PATH) -> None:
+def check_ocr_setup(tessdata_path: str = TESSDATA_PATH, text_layer: bool = True) -> None:
     """
     Checks that poppler and Tesseract are usable before any file is processed.
 
@@ -84,16 +84,21 @@ def check_ocr_setup(tessdata_path: str = TESSDATA_PATH) -> None:
     ----------
     tessdata_path: str
       The directory holding Tesseract's language data.
+    text_layer: bool
+      Whether pages' text layers will be read, which needs poppler's pdftotext and pdfimages too. Not with
+      --ocr-only.
 
     Raises
     ------
     OcrSetupError
       If poppler isn't installed, a Tesseract model is missing, or Tesseract can't start with the given tessdata.
     """
-    missing = [tool for tool in ('pdfinfo', 'pdftoppm', 'pdftotext', 'pdfimages') if shutil.which(tool) is None]
+    tools = ('pdfinfo', 'pdftoppm') + (('pdftotext', 'pdfimages') if text_layer else ())
+    missing = [tool for tool in tools if shutil.which(tool) is None]
     if missing:
         raise OcrSetupError(f'Poppler is not installed or not on PATH (missing {", ".join(missing)}). '
-                            'pdf2image needs it to read PDFs, and the text layer is read with it.')
+                            'pdf2image needs it to read PDFs' + (', and the text layer is read with it.'
+                                                                 if text_layer else '.'))
     if not os.path.isdir(tessdata_path):
         raise OcrSetupError(f'Tesseract data directory {tessdata_path} does not exist.')
     # Without the osd model, Tesseract only warns and reads rotated pages as garbage, so check for it here.

@@ -828,7 +828,7 @@ def check_status_columns(args: argparse.Namespace) -> None:
         raise RuntimeError(f'The transcription_output table has no pii_scrubber_status and pii_scrubber_error '
                            f'columns, which this script records failures in. The database was created before they '
                            f'were added: add them with\n  {ADD_STATUS_COLUMNS_SQL}')
-    check_text_source_column(sessionmaker.kw['bind'])
+    check_text_source_column(sessionmaker)
 
 
 def parse_args() -> argparse.Namespace:

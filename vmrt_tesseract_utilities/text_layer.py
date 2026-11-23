@@ -17,6 +17,7 @@ The cut-offs below were measured on the real records (230,709 pages in 20,762 PD
 
 import re
 import subprocess
+import time
 import unicodedata
 from dataclasses import dataclass
 
@@ -77,6 +78,14 @@ class TextLayerError(Exception):
     pass
 
 
+class DamagedPdfError(TextLayerError):
+    """
+    Raised when a poppler command exits with an error on a PDF (it's damaged or needs a password), so it would fail
+    the same way again. A timeout, a killed command or a missing tool might not, and raises plain TextLayerError.
+    """
+    pass
+
+
 @dataclass
 class PageText:
     """
@@ -129,10 +138,17 @@ def read_pages(input_path: str) -> list[PageText]:
         texts = split_pages(output, len(areas))
     else:
         # pdftotext ends each page with a form feed, so one inside a page's text (a broken font can give one) would
-        # shift every later page's text onto the wrong page. Read each page on its own instead.
+        # shift every later page's text onto the wrong page. Read each page on its own instead. Each call reads the
+        # whole file again, so all of them together get TOOL_TIMEOUT, not each one.
         texts = []
+        deadline = time.monotonic() + TOOL_TIMEOUT
         for page in range(1, len(areas) + 1):
-            text = _run(text_command + ['-f', str(page), '-l', str(page), input_path, '-'], input_path)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TextLayerError(f'pdftotext took longer than {TOOL_TIMEOUT} seconds on {input_path}, reading its '
+                                     f'{len(areas)} pages one at a time (stopped at page {page}).')
+            text = _run(text_command + ['-f', str(page), '-l', str(page), input_path, '-'], input_path,
+                        timeout=remaining)
             texts.append(text[:-1] if text.endswith('\f') else text)
     return [PageText(page, text, ocr_reason(text, area, largest, total))
             for page, (text, area, (largest, total)) in enumerate(zip(texts, areas, images), 1)]
@@ -325,24 +341,28 @@ def split_pages(pdftotext_output: str, count: int) -> list[str]:
     return pages + [''] * (count - len(pages))
 
 
-def _run(args: list[str], input_path: str) -> str:
+def _run(args: list[str], input_path: str, timeout: float = TOOL_TIMEOUT) -> str:
     """
     Runs a poppler command on a PDF and returns what it printed.
 
     Raises
     ------
+    DamagedPdfError
+        If it exits with an error.
     TextLayerError
-        If it can't be run, fails, or takes longer than TOOL_TIMEOUT.
+        If it can't be run, is killed, or takes longer than timeout seconds.
     """
     try:
-        done = subprocess.run(args, capture_output=True, timeout=TOOL_TIMEOUT)
+        done = subprocess.run(args, capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        raise TextLayerError(f'{args[0]} took longer than {TOOL_TIMEOUT} seconds on {input_path}.')
+        raise TextLayerError(f'{args[0]} took longer than {round(timeout)} seconds on {input_path}.')
     except OSError as e:
         # Poppler isn't installed (outside the Docker image) or can't be run.
         raise TextLayerError(f'{args[0]} could not be run on {input_path}: {e}') from e
     if done.returncode != 0:
         error = done.stderr.decode('utf-8', 'replace').strip()[:500]
-        raise TextLayerError(f'{args[0]} exited with code {done.returncode} on {input_path}: {error}')
+        # A negative code means it was killed (e.g. out of memory), which might not happen again.
+        error_class = DamagedPdfError if done.returncode > 0 else TextLayerError
+        raise error_class(f'{args[0]} exited with code {done.returncode} on {input_path}: {error}')
     # A broken encoding can give bytes that aren't UTF-8; they become U+FFFD, which garbled_reason counts as odd.
     return done.stdout.decode('utf-8', 'replace')

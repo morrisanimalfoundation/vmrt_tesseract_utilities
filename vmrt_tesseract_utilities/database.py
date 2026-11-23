@@ -159,7 +159,7 @@ class StringReplacementCompletion(Base):
     )
 
 
-def check_text_source_column(engine) -> None:
+def check_text_source_column(database) -> None:
     """
     Checks that transcription_output has the text_source column, which every step reads and step 2 fills in. Steps
     2 to 5 and redo_text_layer.py call it before doing anything.
@@ -168,12 +168,20 @@ def check_text_source_column(engine) -> None:
     created before issue #82 doesn't have it. Without this check, every query of the table would fail with MySQL's
     "Unknown column" error instead.
 
+    Parameters
+    ----------
+    database : sessionmaker or Engine
+        The step's sessionmaker (from get_database_session), or an engine.
+
     Raises
     ------
     MissingColumnError
         If the table exists without the column, with the SQL that adds it.
     """
-    inspector = inspect(engine)
+    if isinstance(database, sessionmaker):
+        with database() as session:
+            database = session.get_bind()
+    inspector = inspect(database)
     if not inspector.has_table('transcription_output'):
         return
     if 'text_source' not in {column['name'] for column in inspector.get_columns('transcription_output')}:

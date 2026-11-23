@@ -28,9 +28,16 @@ from vmrt_tesseract_utilities.database import (Base,
 DECISIONS = {
     'digital.pdf': (redo_text_layer.REDO, '2 of 2 pages from the text layer'),
     'scan.pdf': (redo_text_layer.KEEP, '0 of 3 pages from the text layer'),
-    'odd.pdf': (redo_text_layer.UNREADABLE, 'pdfinfo exited with code 1 on odd.pdf'),
+    'odd.pdf': (redo_text_layer.UNREADABLE, 'pdftotext took longer than 300 seconds on odd.pdf.'),
     'legacy.pdf': (redo_text_layer.REDO, '1 of 1 pages from the text layer'),
 }
+
+
+def _fake_decide(path):
+    """
+    Stands in for redo_text_layer.decide. A module-level function, so it can be sent to a worker process.
+    """
+    return DECISIONS[path]
 
 
 @pytest.fixture
@@ -40,12 +47,12 @@ def engine(monkeypatch, tmp_path):
 
     - digital.pdf and scan.pdf went through every stage: two output rows each, with their files, a string
       replacement record each, and a visit date found;
-    - odd.pdf was transcribed but its text layer can't be read;
+    - odd.pdf was transcribed but its text layer can't be read this time (poppler took too long);
     - legacy.pdf was transcribed before step 2 recorded ocr_status, so that's empty;
     - failed.pdf failed OCR, queued.pdf hasn't been transcribed yet, and new.pdf was transcribed after #82 (its rows
       have a text_source).
     """
-    monkeypatch.setattr(redo_text_layer, 'decide', lambda path: DECISIONS[path])
+    monkeypatch.setattr(redo_text_layer, 'decide', _fake_decide)
     db_url = f'sqlite:///{tmp_path}/test.db'
     monkeypatch.setenv('SQL_CONNECTION_STRING', db_url)
     engine = create_engine(db_url)
@@ -84,9 +91,9 @@ def engine(monkeypatch, tmp_path):
     return engine
 
 
-def _run(dry_run=False, chunk_size=500):
-    args = argparse.Namespace(document_type='page', dry_run=dry_run, chunk_size=chunk_size, workers=1,
-                              debug_sql=False)
+def _run(dry_run=False, chunk_size=500, workers=1, keep_unreadable=False):
+    args = argparse.Namespace(document_type='page', dry_run=dry_run, chunk_size=chunk_size, workers=workers,
+                              keep_unreadable=keep_unreadable, debug_sql=False)
     return redo_text_layer.redo(args)
 
 
@@ -168,20 +175,91 @@ def test_rerun_checks_nothing_twice(engine):
     assert _run() == {redo_text_layer.REDO: 0, redo_text_layer.KEEP: 0, redo_text_layer.UNREADABLE: 0}
 
 
-def test_missing_output_file_is_fine(engine, tmp_path):
+def test_missing_output_file_is_fine(engine, tmp_path, caplog):
     """
-    Test that an output file that's already gone doesn't stop a PDF from being redone.
+    Test that an output file that's already gone doesn't stop a PDF from being redone, and is counted in the summary.
     """
     (tmp_path / 'digital.pdf-1-ocr.txt').unlink()
-    _run()
+    with caplog.at_level(logging.INFO, logger='import_utility'):
+        _run()
     assert _state(engine)['digital.pdf'] == (None, 0, [], [False])
+    assert '1 old output file(s) of redone PDFs were not found' in caplog.text
+    assert 'probably removed already' in caplog.text
+
+
+def test_relative_output_paths_that_are_not_found_are_reported(engine, tmp_path, monkeypatch, caplog):
+    """
+    Test that old output files stored as relative paths, which this run can't find from where it was started, are
+    reported with the directory they were looked for from, rather than silently left behind.
+    """
+    with Session(engine) as session:
+        for output in session.query(TranscriptionOutput):
+            output.ocr_output_file = 'output/unstructured_text/page/' + output.ocr_output_file.rsplit('/', 1)[-1]
+        session.commit()
+    monkeypatch.chdir(tmp_path)
+    with caplog.at_level(logging.INFO, logger='import_utility'):
+        _run()
+    # digital.pdf and legacy.pdf are redone, with two rows each.
+    assert '4 old output file(s) of redone PDFs were not found' in caplog.text
+    assert '4 of them are relative paths' in caplog.text
+    assert str(tmp_path) in caplog.text
+
+
+def test_keep_unreadable_keeps_their_ocr(engine, caplog):
+    """
+    Test that with --keep-unreadable, a PDF whose text layer couldn't be read this time keeps its outputs, marked
+    text_source 'ocr', so the redo can finish.
+    """
+    with caplog.at_level(logging.INFO, logger='import_utility'):
+        counts = _run(keep_unreadable=True)
+    assert counts == {redo_text_layer.REDO: 2, redo_text_layer.KEEP: 2, redo_text_layer.UNREADABLE: 0}
+    assert _state(engine)['odd.pdf'] == ('success', 2, ['ocr'], [True, True])
+    assert 'Keeping the OCR of odd.pdf (kept with --keep-unreadable' in caplog.text
+    assert _run() == {redo_text_layer.REDO: 0, redo_text_layer.KEEP: 0, redo_text_layer.UNREADABLE: 0}
+
+
+def test_unreadable_pdfs_get_a_hint_in_the_summary(engine, caplog):
+    """
+    Test that a run leaving PDFs to check again says how to finish if they never become readable.
+    """
+    with caplog.at_level(logging.INFO, logger='import_utility'):
+        _run()
+    assert 'add --keep-unreadable' in caplog.text
+
+
+def test_workers_give_the_same_result(engine, tmp_path):
+    """
+    Test that checking PDFs in worker processes (the default) redoes and keeps the same PDFs as checking them one at
+    a time, with one pool for the whole run across several batches.
+    """
+    with mock.patch.object(redo_text_layer, 'ProcessPoolExecutor', wraps=redo_text_layer.ProcessPoolExecutor) as pool:
+        counts = _run(workers=2, chunk_size=2)
+    assert pool.call_count == 1
+    assert counts == {redo_text_layer.REDO: 2, redo_text_layer.KEEP: 1, redo_text_layer.UNREADABLE: 1}
+    assert _state(engine)['digital.pdf'] == (None, 0, [], [False])
+    assert _state(engine)['scan.pdf'] == ('success', 2, ['ocr'], [True, True])
+
+
+def test_main_stops_without_poppler(monkeypatch, engine, caplog):
+    """
+    Test that the script stops before checking anything when poppler's tools are missing, rather than finding every
+    PDF unreadable.
+    """
+    monkeypatch.setattr(redo_text_layer.shutil, 'which', lambda tool: None)
+    monkeypatch.setattr('sys.argv', ['redo_text_layer.py', '--document-type=page'])
+    before = _state(engine)
+    with caplog.at_level(logging.ERROR, logger='import_utility'):
+        assert redo_text_layer.main() == 1
+    assert 'missing pdfinfo, pdfimages, pdftotext' in caplog.text
+    assert _state(engine) == before
 
 
 @pytest.mark.skipif(shutil.which('pdftotext') is None or isinstance(PIL, mock.MagicMock),
                     reason='poppler or Pillow is not installed')
 def test_decide_on_real_pdfs(tmp_path):
     """
-    Test the decision on generated PDFs: redo one with a born-digital page, keep a scan, and keep a damaged file.
+    Test the decision on generated PDFs: redo one with a born-digital page, keep a scan, and keep a damaged file, which
+    step 2 would read with OCR too.
     """
     from tests.synthetic_pdfs import DigitalPage, SyntheticPage, write_pdf
     lines = ['Annual wellness exam for a nine year old spayed female.',
@@ -194,4 +272,6 @@ def test_decide_on_real_pdfs(tmp_path):
     broken.write_bytes(b'%PDF-1.4\nnot a PDF\n')
     assert redo_text_layer.decide(mixed) == (redo_text_layer.REDO, '1 of 2 pages from the text layer')
     assert redo_text_layer.decide(scan) == (redo_text_layer.KEEP, '0 of 1 pages from the text layer')
-    assert redo_text_layer.decide(str(broken))[0] == redo_text_layer.UNREADABLE
+    decision, why = redo_text_layer.decide(str(broken))
+    assert decision == redo_text_layer.KEEP
+    assert why.startswith('its text layer could not be read')
