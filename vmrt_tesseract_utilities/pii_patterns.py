@@ -151,13 +151,21 @@ ADDRESS_PATTERNS = [
 # of its street, a unit and a ZIP code after it, and a house number and direction before it. See address_around.
 _STREET_REST_NAME_AND_TYPE = _street_name_then_type(lambda word: rf'(?:[ \t]+{word}){{0,3}}[ \t]+')
 _STREET_REST = rf'{_STREET_REST_NAME_AND_TYPE}(?:[ \t]+{_DIRECTION})?'
-# A word before a unit word, as in "500 Main St Medical Ste 100A" (a building's or plaza's name). Not before a bare
-# "#", so the number in "500 Main St Invoice #12345" is kept.
+_UNIT_AFTER = rf'\.?[ \t]*[,;]?[ \t]*(?:{_DIRECTION}[ \t]+)?{_UNIT_WORD}[ \t]*#?[A-Z0-9-]+\b'
+# After a street, a unit can also follow a word, as in "500 Main St Medical Ste 100A" (a building's or plaza's name).
+# Not before a bare "#", so the number in "500 Main St Invoice #12345" is kept. Only after a street: after a city
+# alone, the word is more often part of the record ("Portland Oncology Unit 4").
 _WORD_BEFORE_UNIT = r"[A-Z][A-Za-z'.-]*[ \t]+(?=(?i:suite|ste|unit|apt|bldg|building)\b)"
-_UNIT_AFTER = rf'\.?[ \t]*[,;]?[ \t]*(?:{_DIRECTION}[ \t]+|{_WORD_BEFORE_UNIT})?{_UNIT_WORD}[ \t]*#?[A-Z0-9-]+\b'
+_UNIT_AFTER_STREET = (rf'\.?[ \t]*[,;]?[ \t]*(?:{_DIRECTION}[ \t]+|{_WORD_BEFORE_UNIT})?{_UNIT_WORD}'
+                      rf'[ \t]*#?[A-Z0-9-]+\b')
 _ZIP_AFTER = rf'\.?(?:,?[ \t]+{_STATE})?,?[ \t]+{_ZIP}(?![\w-])'
 _AFTER_ADDRESS_RE = re.compile(rf'(?P<street>{_STREET_REST})?(?:{_UNIT_AFTER})?(?:{_ZIP_AFTER})?',
                                ADDRESS_REGEX_FLAGS)
+_AFTER_STREET_RE = re.compile(rf'(?P<street>{_STREET_REST})?(?:{_UNIT_AFTER_STREET})?(?:{_ZIP_AFTER})?',
+                              ADDRESS_REGEX_FLAGS)
+# A span that already ends with a street's type, and maybe its direction ("500 Main St", "Harbor Blvd NE").
+_STREET_TYPE_AT_END_RE = re.compile(rf'(?<![A-Za-z])(?:{_STREET_TYPE}|{_ABBREVIATED_STREET_TYPE})'
+                                    rf'(?:[ \t]+{_DIRECTION})?\Z', ADDRESS_REGEX_FLAGS)
 # A span that ends with a unit word, but not its number ("Juniper Ridge STE" in "Juniper Ridge STE 1000").
 _UNIT_WORD_AT_END_RE = re.compile(rf'(?<![A-Za-z]){_UNIT_WORD}\Z', ADDRESS_REGEX_FLAGS)
 _UNIT_NUMBER_RE = re.compile(r'[ \t]*#?[A-Z0-9-]+\b', ADDRESS_REGEX_FLAGS)
@@ -194,8 +202,11 @@ _BARE_DOMAIN = rf'(?<![\w.@-]){_HOST_LABEL}(?:\.{_HOST_LABEL})*\.'
 # (name, regex, score) for each URL pattern.
 URL_PATTERNS = [
     ('URL with scheme', r'''\b(?:https?|ftp)://[^\s<>"']+''', 0.6),
-    # A comma between parts counts too: "www.sunnymeadows,vet" is a typo for a URL, and still names the clinic.
-    ('www URL', rf'\bwww[0-9]{{0,3}}[.,]{_HOST_LABEL}(?:[.,]{_HOST_LABEL})+{_URL_TAIL}', 0.6),
+    # A comma typed for a dot counts too, after "www" or before a known top-level domain: "www.sunnymeadows,vet" is a
+    # typo for a URL, and still names the clinic. Anywhere else a comma ends the URL, so the date in
+    # "www.clinic.com,11/05/2024" isn't taken with it.
+    ('www URL', rf'\bwww[0-9]{{0,3}}[.,]{_HOST_LABEL}(?:\.{_HOST_LABEL})*'
+                rf'(?:\.{_HOST_LABEL}|,{_tld(BARE_DOMAIN_TLDS + WORD_TLDS)}(?![\w-])){_URL_TAIL}', 0.6),
     ('Bare domain', rf'{_BARE_DOMAIN}{_tld(BARE_DOMAIN_TLDS)}\b(?![.-]?\w){_URL_TAIL}', 0.5),
     ('Bare domain with a path', rf'''{_BARE_DOMAIN}{_tld(WORD_TLDS)}/[^\s<>"']*''', 0.5),
 ]
@@ -282,6 +293,9 @@ def address_around(text: str, start: int, end: int, name_may_start_before: bool 
         number = _UNIT_NUMBER_RE.match(text, end)
         end = number.end() if number else end
     after = _AFTER_ADDRESS_RE.match(text, end)
+    if after.group('street') or _STREET_TYPE_AT_END_RE.search(text, start, end):
+        # A street, so a unit after a building's name counts too.
+        after = _AFTER_STREET_RE.match(text, end)
     window = max(0, start - 80)
     before = None
     if after.group('street') and name_may_start_before:

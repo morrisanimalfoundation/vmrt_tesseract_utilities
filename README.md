@@ -224,13 +224,16 @@ What it keeps and removes, beyond what the model finds on its own:
   finds only part of an address, such as a street's or city's
   name, the address parts right next to it on the same line are scrubbed with it: a house number and direction
   before it, and the rest of the street, a suite or unit and a ZIP code after it (`1234 N <Cedar Ridge> STE 100`,
-  `<Springfield> 97477`), including a suite after a building's name (`500 Main St Medical Ste 100A`). A state left on its own after a city is kept, since it doesn't identify anyone.
-- **URLs need a scheme (`https://`), `www.` (a comma typed for a dot counts too, as in `www.name,vet`), or a common
-  top-level domain** (`.com`, `.net`, `.org`, `.edu`,
+  `<Springfield> 97477`). After a street, that includes a suite after a building's name (`500 Main St Medical
+  Ste 100A`), but not after a city alone (`Portland Oncology Unit 4` keeps `Oncology Unit 4`). A state left on its
+  own after a city is kept, since it doesn't identify anyone.
+- **URLs need a scheme (`https://`), `www.`, or a common top-level domain** (`.com`, `.net`, `.org`, `.edu`,
   `.gov`, `.info` or `.biz`; the list is `BARE_DOMAIN_TLDS` in `vmrt_tesseract_utilities/pii_patterns.py`), so
   words OCR joined with a full stop, such as `lethargic.do`, are kept. Top-level domains that are also words in
   a vet record (`.dog`, `.vet`, `.pet`, `.care`, `.us` and others in `WORD_TLDS`) only count with a path after
-  them (`cedarridge.vet/contact`), so `VOMITING.DOG` and `HOME.CARE` are kept.
+  them (`cedarridge.vet/contact`), so `VOMITING.DOG` and `HOME.CARE` are kept. In a `www.` URL, a comma typed for
+  a dot counts too, right after `www` or before a known top-level domain (`www.name,vet`); anywhere else a comma
+  ends the URL, so the date in `www.name.com,11/05/2024` is kept.
 - **Initials are kept, names are removed.** A name that's only initials (`JO`, `J.O.`), such as a staff
   column's, is left in and listed in the report as not scrubbed. Three capitals in a row (`TOM`) and anything
   after a title (`MRS. COX`) count as names. One caveat: a two-letter name written in capitals (`AL`) looks
