@@ -8,8 +8,10 @@ from typing import List, Optional, Set, Tuple
 import sqlalchemy
 
 from vmrt_tesseract_utilities.cli import normalize_flag_spelling
-from vmrt_tesseract_utilities.database import (TranscriptionMetadata,
+from vmrt_tesseract_utilities.database import (MissingColumnError,
+                                               TranscriptionMetadata,
                                                TranscriptionOutput,
+                                               check_text_source_column,
                                                get_database_session)
 from vmrt_tesseract_utilities.date_extractor import DateExtractor, find_dates
 from vmrt_tesseract_utilities.logging import stdout_logger
@@ -430,4 +432,9 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == '__main__':
     args = parse_args()
+    try:
+        check_text_source_column(get_database_session(echo=args.debug_sql).kw['bind'])
+    except MissingColumnError as e:
+        stdout_logger.error(f'Stopping before mining anything: {e}')
+        sys.exit(1)
     save_visit_dates(args)

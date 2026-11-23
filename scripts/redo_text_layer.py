@@ -2,8 +2,9 @@
 Sends PDFs transcribed before issue #82 (all with OCR) back through the pipeline, so pages whose PDF holds their text
 get that text instead.
 
-A PDF is redone when it was transcribed successfully, its output rows have no text_source (they were made before
-#82), and at least one of its pages would now be read from its text layer. Redoing it removes everything the
+A PDF is redone when it was transcribed (its ocr_status is 'success', or empty in a database that got that column
+after its PDFs were transcribed), its output rows have no text_source (they were made before #82), and at least one
+of its pages would now be read from its text layer. Redoing it removes everything the
 pipeline made from its old text, so every stage picks it up again on its next run, in the usual order:
 
 - its transcription_output rows, their string replacement records, and the files they point to (the OCR text,
@@ -12,7 +13,8 @@ pipeline made from its old text, so every stage picks it up again on its next ru
 - its ocr_status and ocr_error, so transcribe_pdfs.py reads it again.
 
 A PDF whose pages would all still be read with OCR keeps its outputs, which are marked text_source 'ocr', so it isn't
-checked again. Each PDF is changed in its own transaction, so the script can be stopped and run again, and it only
+checked again. One whose text layer couldn't be read (a damaged file, or poppler taking too long) is left as it is,
+so the next run checks it again. Each PDF is changed in its own transaction, so the script can be stopped and run again, and it only
 ever looks at PDFs it hasn't dealt with yet.
 
 Run it while no pipeline stage is running, and with --dry-run first: that only counts what would be redone.
@@ -25,6 +27,8 @@ import argparse
 import os
 import sys
 from concurrent.futures import ProcessPoolExecutor
+
+from sqlalchemy import and_, or_
 
 from vmrt_tesseract_utilities.cli import normalize_flag_spelling
 from vmrt_tesseract_utilities.database import (MissingColumnError,
@@ -56,7 +60,7 @@ def decide(input_file: str) -> tuple[str, str]:
     -------
     tuple[str, str]
         REDO if at least one page would be read from its text layer, KEEP if none would, or UNREADABLE if poppler
-        can't read its text layer (so it would be read with OCR, as it was); and a few words on why.
+        couldn't read its text layer this time; and a few words on why.
     """
     try:
         pages = read_pages(input_file)
@@ -124,8 +128,8 @@ def redo(args: argparse.Namespace) -> dict[str, int]:
     Returns
     -------
     dict[str, int]
-        How many PDFs were redone (or would be, with --dry-run), kept, and kept because their text layer couldn't be
-        read.
+        How many PDFs were redone (or would be, with --dry-run), kept, and left to check again because their text
+        layer couldn't be read.
     """
     counts = {REDO: 0, KEEP: 0, UNREADABLE: 0}
     sessionmaker = get_database_session(echo=args.debug_sql)
@@ -139,8 +143,10 @@ def redo(args: argparse.Namespace) -> dict[str, int]:
                      .where(TranscriptionInput.id > last_id)
                      .where(is_pdf_column(TranscriptionInput.input_file))
                      .where(TranscriptionInput.document_type == args.document_type)
-                     .where(TranscriptionInput.ocr_status == 'success')
-                     .where(TranscriptionInput.assets.any(TranscriptionOutput.text_source.is_(None)))
+                     # An empty ocr_status, with outputs, is a PDF transcribed before step 2 recorded it.
+                     .where(or_(TranscriptionInput.ocr_status == 'success', TranscriptionInput.ocr_status.is_(None)))
+                     .where(TranscriptionInput.assets.any(and_(TranscriptionOutput.text_source.is_(None),
+                                                               TranscriptionOutput.ocr_output_file.isnot(None))))
                      .order_by(TranscriptionInput.id)
                      .limit(args.chunk_size)
                      .all())
@@ -156,8 +162,10 @@ def redo(args: argparse.Namespace) -> dict[str, int]:
             for db_input, (decision, why) in zip(batch, decisions):
                 counts[decision] += 1
                 if decision == UNREADABLE:
-                    stdout_logger.warning(f'Item {db_input.input_file}: kept as it is, its text layer could not be '
-                                          f'read: {why}')
+                    # Not marked, so the next run checks it again: poppler may only have timed out this time.
+                    stdout_logger.warning(f'Item {db_input.input_file}: left as it is, to check again next run, since '
+                                          f'its text layer could not be read: {why}')
+                    continue
                 if args.dry_run:
                     if decision == REDO:
                         stdout_logger.info(f'Would redo {db_input.input_file} ({why}).')
@@ -175,7 +183,8 @@ def redo(args: argparse.Namespace) -> dict[str, int]:
             stdout_logger.info(f'Checked {sum(counts.values())} PDFs so far.')
     verb = 'Would redo' if args.dry_run else 'Redid'
     stdout_logger.info(f'All done! {verb} {counts[REDO]} PDFs; {counts[KEEP]} kept their OCR (no page has a usable '
-                       f'text layer); {counts[UNREADABLE]} kept their OCR because their text layer could not be read.')
+                       f'text layer); {counts[UNREADABLE]} left to check again, since their text layer could not be '
+                       f'read.')
     if counts[REDO] and not args.dry_run:
         stdout_logger.info('Now run the pipeline steps again, from transcribe_pdfs.py on, to process them.')
     return counts
@@ -187,7 +196,7 @@ def parse_args() -> argparse.Namespace:
                         help='The document type to redo: document, page or block (default: %(default)s).')
     parser.add_argument('--dry-run', action='store_true', help='Only count and log what would be redone.')
     parser.add_argument('--chunk-size', type=int, default=500, help='PDFs checked per batch (default: %(default)s).')
-    parser.add_argument('--workers', type=int, default=os.cpu_count(),
+    parser.add_argument('--workers', type=int, default=os.cpu_count() or 1,
                         help='PDFs whose pages are checked at once (default: the number of CPUs, %(default)s).')
     parser.add_argument('--debug-sql', action='store_true', help='Enable SQL debugging')
     return parser.parse_args(normalize_flag_spelling(sys.argv[1:]))

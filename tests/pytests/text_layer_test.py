@@ -181,6 +181,29 @@ def test_read_pages_puts_the_tools_together():
     assert [(r.page, r.ocr_reason) for r in results] == [(1, ''), (2, SCAN), (3, NO_TEXT)]
 
 
+def test_form_feed_inside_a_page_does_not_shift_pages():
+    """
+    Test that a form feed inside a page's text (as a broken font can give) doesn't move later pages' text onto the
+    wrong page: the pages are read one at a time instead.
+    """
+    page_text = {1: 'Annual exam. Weight 32 kg. Vaccines current. ' * 3 + '\fmore of page 1\n',
+                 2: 'Recheck exam. Ears clean. Weight 30.8 kg. Next visit in six months. ' * 2 + '\n'}
+
+    def run(args, **kwargs):
+        if args[0] == 'pdfinfo':
+            out = 'Pages:          2\nPage    1 size: 612 x 792 pts\nPage    2 size: 612 x 792 pts\n'
+        elif args[0] == 'pdfimages':
+            out = 'page   num  type\n----\n'
+        elif '-f' in args:
+            out = page_text[int(args[args.index('-f') + 1])] + '\f'
+        else:
+            out = page_text[1] + '\f' + page_text[2] + '\f'
+        return subprocess.CompletedProcess(args, 0, stdout=out.encode(), stderr=b'')
+    with mock.patch('subprocess.run', side_effect=run):
+        results = read_pages('record.pdf')
+    assert [r.text for r in results] == [page_text[1], page_text[2]]
+
+
 @pytest.mark.parametrize('text, expected', [
     # A real page's text: words, numbers, a table, a dashed line and form lines.
     ('Exam: Weight 31.2 kg.\nRabies   03/14/2023   03/14/2026\n' + '-' * 60 + '\nSigned: ________\n' * 3, ''),

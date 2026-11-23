@@ -450,7 +450,7 @@ it, or copy it anywhere it is not supposed to be.
   ```sql
   ALTER TABLE transcription_output ADD COLUMN pii_scrubber_status VARCHAR(20), ADD COLUMN pii_scrubber_error TEXT;
   ```
-  and one created before step 2 started copying text out of PDFs needs the following (steps 2 and
+  and one created before step 2 started copying text out of PDFs needs the following (steps 2 to 5 and
   `redo_text_layer.py` stop with this command if the column is missing; see also
   [Redoing records after the text layer change](#redoing-records-after-the-text-layer-change)):
   ```sql

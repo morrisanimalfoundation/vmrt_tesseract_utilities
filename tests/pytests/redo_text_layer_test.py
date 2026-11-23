@@ -29,6 +29,7 @@ DECISIONS = {
     'digital.pdf': (redo_text_layer.REDO, '2 of 2 pages from the text layer'),
     'scan.pdf': (redo_text_layer.KEEP, '0 of 3 pages from the text layer'),
     'odd.pdf': (redo_text_layer.UNREADABLE, 'pdfinfo exited with code 1 on odd.pdf'),
+    'legacy.pdf': (redo_text_layer.REDO, '1 of 1 pages from the text layer'),
 }
 
 
@@ -40,7 +41,9 @@ def engine(monkeypatch, tmp_path):
     - digital.pdf and scan.pdf went through every stage: two output rows each, with their files, a string
       replacement record each, and a visit date found;
     - odd.pdf was transcribed but its text layer can't be read;
-    - failed.pdf failed OCR, and new.pdf was transcribed after #82 (its rows have a text_source).
+    - legacy.pdf was transcribed before step 2 recorded ocr_status, so that's empty;
+    - failed.pdf failed OCR, queued.pdf hasn't been transcribed yet, and new.pdf was transcribed after #82 (its rows
+      have a text_source).
     """
     monkeypatch.setattr(redo_text_layer, 'decide', lambda path: DECISIONS[path])
     db_url = f'sqlite:///{tmp_path}/test.db'
@@ -52,7 +55,8 @@ def engine(monkeypatch, tmp_path):
                                                  key_column='name', target_count=1)
         session.add(replacement_pass)
         for name, status in (('digital.pdf', 'success'), ('scan.pdf', 'success'), ('odd.pdf', 'success'),
-                             ('failed.pdf', 'failed'), ('new.pdf', 'success')):
+                             ('legacy.pdf', None), ('failed.pdf', 'failed'), ('queued.pdf', None),
+                             ('new.pdf', 'success')):
             db_input = TranscriptionInput(document_type='page', input_file=name, ocr_status=status)
             session.add(db_input)
             db_input.derived_metadata.append(TranscriptionMetadata(
@@ -61,7 +65,7 @@ def engine(monkeypatch, tmp_path):
             db_input.derived_metadata.append(TranscriptionMetadata(
                 subject_id='094-000001', visit_date=datetime.datetime(2024, 3, 14),
                 extracted_date=datetime.datetime(2024, 3, 15)))
-            if status == 'failed':
+            if name in ('failed.pdf', 'queued.pdf'):
                 continue
             for page in (1, 2):
                 files = []
@@ -100,18 +104,22 @@ def test_redo_resets_born_digital_pdfs_and_marks_the_rest(engine, tmp_path, capl
     Asserts:
         digital.pdf has no outputs, string replacement records or output files left, one empty metadata row, and no
         ocr_status, so transcribe_pdfs.py picks it up again.
-        scan.pdf and odd.pdf keep their outputs and files, marked text_source 'ocr'.
-        failed.pdf and new.pdf aren't touched.
+        legacy.pdf, with an empty ocr_status, is redone the same way.
+        scan.pdf keeps its outputs and files, marked text_source 'ocr'.
+        odd.pdf, whose text layer couldn't be read, is left unmarked, so the next run checks it again.
+        failed.pdf, queued.pdf and new.pdf aren't touched.
         The summary counts each.
     """
     with caplog.at_level(logging.INFO, logger='import_utility'):
         counts = _run()
-    assert counts == {redo_text_layer.REDO: 1, redo_text_layer.KEEP: 1, redo_text_layer.UNREADABLE: 1}
+    assert counts == {redo_text_layer.REDO: 2, redo_text_layer.KEEP: 1, redo_text_layer.UNREADABLE: 1}
     assert _state(engine) == {
         'digital.pdf': (None, 0, [], [False]),
         'scan.pdf': ('success', 2, ['ocr'], [True, True]),
-        'odd.pdf': ('success', 2, ['ocr'], [True, True]),
+        'odd.pdf': ('success', 2, [None], [True, True]),
+        'legacy.pdf': (None, 0, [], [False]),
         'failed.pdf': ('failed', 0, [], [True, True]),
+        'queued.pdf': (None, 0, [], [True, True]),
         'new.pdf': ('success', 2, ['ocr'], [True, True]),
     }
     with Session(engine) as session:
@@ -121,8 +129,8 @@ def test_redo_resets_born_digital_pdfs_and_marks_the_rest(engine, tmp_path, capl
     assert not list(tmp_path.glob('digital.pdf-*'))
     assert len(list(tmp_path.glob('scan.pdf-*'))) == 8
     assert 'Redoing digital.pdf (2 of 2 pages from the text layer).' in caplog.text
-    assert 'odd.pdf: kept as it is, its text layer could not be read' in caplog.text
-    assert 'Redid 1 PDFs; 1 kept their OCR' in caplog.text
+    assert 'odd.pdf: left as it is, to check again next run' in caplog.text
+    assert 'Redid 2 PDFs; 1 kept their OCR (no page has a usable text layer); 1 left to check again' in caplog.text
 
 
 def test_dry_run_changes_nothing(engine, tmp_path, caplog):
@@ -136,20 +144,27 @@ def test_dry_run_changes_nothing(engine, tmp_path, caplog):
     before = _state(engine)
     with caplog.at_level(logging.INFO, logger='import_utility'):
         counts = _run(dry_run=True)
-    assert counts[redo_text_layer.REDO] == 1
+    assert counts[redo_text_layer.REDO] == 2
     assert _state(engine) == before
-    assert len(list(tmp_path.glob('*.pdf-*'))) == 32
+    assert len(list(tmp_path.glob('*.pdf-*'))) == 40
     assert 'Would redo digital.pdf (2 of 2 pages from the text layer).' in caplog.text
 
 
 def test_rerun_checks_nothing_twice(engine):
     """
-    Test that the script can be run again (after being stopped, say) without redoing or rechecking anything.
+    Test that the script can be run again (after being stopped, say) without redoing or rechecking anything, except
+    a PDF whose text layer couldn't be read, which is tried again.
 
     Asserts:
-        A second run finds no PDFs left to check.
+        A second run only finds odd.pdf, and redoes it once its text layer can be read.
     """
     _run(chunk_size=1)
+    assert _run() == {redo_text_layer.REDO: 0, redo_text_layer.KEEP: 0, redo_text_layer.UNREADABLE: 1}
+    DECISIONS['odd.pdf'], unreadable = (redo_text_layer.REDO, '1 of 2 pages from the text layer'), DECISIONS['odd.pdf']
+    try:
+        assert _run() == {redo_text_layer.REDO: 1, redo_text_layer.KEEP: 0, redo_text_layer.UNREADABLE: 0}
+    finally:
+        DECISIONS['odd.pdf'] = unreadable
     assert _run() == {redo_text_layer.REDO: 0, redo_text_layer.KEEP: 0, redo_text_layer.UNREADABLE: 0}
 
 

@@ -161,7 +161,8 @@ class StringReplacementCompletion(Base):
 
 def check_text_source_column(engine) -> None:
     """
-    Checks that transcription_output has the text_source column, which every step reads and step 2 fills in.
+    Checks that transcription_output has the text_source column, which every step reads and step 2 fills in. Steps
+    2 to 5 and redo_text_layer.py call it before doing anything.
 
     `database_setup.py install` creates missing tables but doesn't add columns to existing ones, so a database
     created before issue #82 doesn't have it. Without this check, every query of the table would fail with MySQL's

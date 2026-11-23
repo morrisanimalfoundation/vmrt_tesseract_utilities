@@ -123,8 +123,17 @@ def read_pages(input_path: str) -> list[PageText]:
     # pdfinfo stops at the last page, so a last page past it lists every page's size in one call.
     areas = page_areas(_run(['pdfinfo', '-f', '1', '-l', str(MAX_PAGES), input_path], input_path))
     images = image_areas(_run(['pdfimages', '-list', input_path], input_path), areas)
-    texts = split_pages(_run(['pdftotext', '-layout', '-enc', 'UTF-8', input_path, '-'], input_path),
-                        len(areas))
+    text_command = ['pdftotext', '-layout', '-enc', 'UTF-8']
+    output = _run(text_command + [input_path, '-'], input_path)
+    if output.count('\f') == len(areas):
+        texts = split_pages(output, len(areas))
+    else:
+        # pdftotext ends each page with a form feed, so one inside a page's text (a broken font can give one) would
+        # shift every later page's text onto the wrong page. Read each page on its own instead.
+        texts = []
+        for page in range(1, len(areas) + 1):
+            text = _run(text_command + ['-f', str(page), '-l', str(page), input_path, '-'], input_path)
+            texts.append(text[:-1] if text.endswith('\f') else text)
     return [PageText(page, text, ocr_reason(text, area, largest, total))
             for page, (text, area, (largest, total)) in enumerate(zip(texts, areas, images), 1)]
 
