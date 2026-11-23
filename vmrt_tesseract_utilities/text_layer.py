@@ -43,8 +43,8 @@ MAX_ODD_CHAR_SHARE = 0.2
 # ...or when more than this share of its characters are control characters. On a few clean pages pdftotext gives
 # about 1-1.7%; checked against OCR, pages over 3% were garbled...
 MAX_CONTROL_SHARE = 0.02
-# ...or when, leaving out numbers, underscores (form fill-in lines) and repeated runs like "-----", it has more than
-# this many punctuation and symbol characters per letter. That catches a broken encoding that turns letters into
+# ...or when, leaving out numbers, underscores (form fill-in lines) and repeated runs like "-----" or ". . . .", it has
+# more than this many punctuation and symbol characters per letter. That catches a broken encoding that turns letters into
 # ASCII punctuation, which the checks above miss. Checked against OCR: clean pages had up to 0.21, garbled ones 0.6
 # and up.
 MAX_SYMBOLS_PER_LETTER = 0.4
@@ -123,7 +123,7 @@ def read_pages(input_path: str) -> list[PageText]:
     # pdfinfo stops at the last page, so a last page past it lists every page's size in one call.
     areas = page_areas(_run(['pdfinfo', '-f', '1', '-l', str(MAX_PAGES), input_path], input_path))
     images = image_areas(_run(['pdfimages', '-list', input_path], input_path), areas)
-    texts = split_pages(_run(['pdftotext', '-q', '-layout', '-enc', 'UTF-8', input_path, '-'], input_path),
+    texts = split_pages(_run(['pdftotext', '-layout', '-enc', 'UTF-8', input_path, '-'], input_path),
                         len(areas))
     return [PageText(page, text, ocr_reason(text, area, largest, total))
             for page, (text, area, (largest, total)) in enumerate(zip(texts, areas, images), 1)]
@@ -185,6 +185,8 @@ def garbled_reason(text: str) -> str:
     ''
     >>> garbled_reason('Owner: ____ ____ Date: __/__/__ Signed: _____ ' * 10)
     ''
+    >>> garbled_reason('Exam fee . . . . . . . . . . . . . . . . . . $45.00\\n' * 10)
+    ''
     >>> garbled_reason('\\ufffd\\ufffd ' * 50)
     'odd characters'
     >>> garbled_reason('a80 %$ \\x07(!# Clinic ' * 20)
@@ -201,7 +203,7 @@ def garbled_reason(text: str) -> str:
         return 'odd characters'
     if sum(1 for c in chars if unicodedata.category(c) == 'Cc') / len(chars) > MAX_CONTROL_SHARE:
         return 'control characters'
-    rest = re.sub(r'([^\w\s])\1+', r'\1', NUMBER_RE.sub(' ', text).replace('_', ' '))
+    rest = re.sub(r'([^\w\s])(?: ?\1)+', r'\1', NUMBER_RE.sub(' ', text).replace('_', ' '))
     letters = sum(c.isalpha() for c in rest)
     symbols = sum(1 for c in rest if not c.isspace() and not c.isalnum())
     if symbols > MAX_SYMBOLS_PER_LETTER * letters:
@@ -251,8 +253,9 @@ def image_areas(pdfimages_output: str, areas: list[float]) -> list[tuple[float, 
     Reads, from the output of `pdfimages -list`, the area of the largest image on each page and of all its images
     added up (up to the page's own area), in square inches.
 
-    An image's size on the page is its size in pixels divided by its resolution there. An image too stretched for
-    pdfimages to give a resolution (shown as 0) is counted as covering the whole page.
+    An image's size on the page is its size in pixels divided by its resolution there. An image with under 1 pixel
+    per inch along a side (pdfimages shows 0) is left out: it can't hold readable text or be a scan, and PDF makers
+    use stretched images of a pixel or two for rules, borders and background fills.
 
     Parameters
     ----------
@@ -276,9 +279,9 @@ def image_areas(pdfimages_output: str, areas: list[float]) -> list[tuple[float, 
     >>> image_areas(header + '   1     0 image     850  1100  gray    1   8  image  no   [inline]   100   100  0B 0.0%\\n',
     ...             [93.5])
     [(93.5, 93.5)]
-    >>> image_areas(header + '   1     0 image       4     4  gray    1   8  image  no         7  0     0     0  1B 0.0%\\n',
+    >>> image_areas(header + '   1     0 image       1     1  gray    1   8  image  no         7  0     0    72  1B 0.0%\\n',
     ...             [93.5])
-    [(93.5, 93.5)]
+    [(0.0, 0.0)]
     """
     largest, covered = [0.0] * len(areas), [0.0] * len(areas)
     for line in pdfimages_output.splitlines()[2:]:
@@ -294,7 +297,9 @@ def image_areas(pdfimages_output: str, areas: list[float]) -> list[tuple[float, 
             continue
         if not 1 <= page <= len(areas):
             continue
-        area = width / x_ppi * height / y_ppi if x_ppi > 0 and y_ppi > 0 else areas[page - 1]
+        if x_ppi <= 0 or y_ppi <= 0:
+            continue
+        area = width / x_ppi * height / y_ppi
         largest[page - 1] = max(largest[page - 1], area)
         covered[page - 1] = min(covered[page - 1] + area, areas[page - 1])
     return list(zip(largest, covered))

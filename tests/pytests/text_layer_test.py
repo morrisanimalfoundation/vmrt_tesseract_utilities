@@ -113,7 +113,7 @@ def test_logo_on_a_digital_page_keeps_its_text_layer(pdf):
 
 @needs_poppler
 def test_several_small_images_on_a_digital_page_keep_its_text_layer(pdf):
-    # Four images of about 5% of the page each: 20% together, but none large enough to hold much text.
+    # Four images of about 4% of the page each: 15% together, but none large enough to hold much text.
     page = DigitalPage(VISIT, image=SyntheticPage(['Logo']), image_box=(72, 72, 288, 260), image_strips=4)
     [result] = read_pages(pdf(page))
     assert result.use_text_layer
