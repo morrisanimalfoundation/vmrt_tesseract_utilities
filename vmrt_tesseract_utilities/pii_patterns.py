@@ -151,7 +151,10 @@ ADDRESS_PATTERNS = [
 # of its street, a unit and a ZIP code after it, and a house number and direction before it. See address_around.
 _STREET_REST_NAME_AND_TYPE = _street_name_then_type(lambda word: rf'(?:[ \t]+{word}){{0,3}}[ \t]+')
 _STREET_REST = rf'{_STREET_REST_NAME_AND_TYPE}(?:[ \t]+{_DIRECTION})?'
-_UNIT_AFTER = rf'\.?[ \t]*[,;]?[ \t]*(?:{_DIRECTION}[ \t]+)?{_UNIT_WORD}[ \t]*#?[A-Z0-9-]+\b'
+# A word before a unit word, as in "500 Main St Medical Ste 100A" (a building's or plaza's name). Not before a bare
+# "#", so the number in "500 Main St Invoice #12345" is kept.
+_WORD_BEFORE_UNIT = r"[A-Z][A-Za-z'.-]*[ \t]+(?=(?i:suite|ste|unit|apt|bldg|building)\b)"
+_UNIT_AFTER = rf'\.?[ \t]*[,;]?[ \t]*(?:{_DIRECTION}[ \t]+|{_WORD_BEFORE_UNIT})?{_UNIT_WORD}[ \t]*#?[A-Z0-9-]+\b'
 _ZIP_AFTER = rf'\.?(?:,?[ \t]+{_STATE})?,?[ \t]+{_ZIP}(?![\w-])'
 _AFTER_ADDRESS_RE = re.compile(rf'(?P<street>{_STREET_REST})?(?:{_UNIT_AFTER})?(?:{_ZIP_AFTER})?',
                                ADDRESS_REGEX_FLAGS)
@@ -191,7 +194,8 @@ _BARE_DOMAIN = rf'(?<![\w.@-]){_HOST_LABEL}(?:\.{_HOST_LABEL})*\.'
 # (name, regex, score) for each URL pattern.
 URL_PATTERNS = [
     ('URL with scheme', r'''\b(?:https?|ftp)://[^\s<>"']+''', 0.6),
-    ('www URL', rf'\bwww[0-9]{{0,3}}\.{_HOST_LABEL}(?:\.{_HOST_LABEL})+{_URL_TAIL}', 0.6),
+    # A comma between parts counts too: "www.sunnymeadows,vet" is a typo for a URL, and still names the clinic.
+    ('www URL', rf'\bwww[0-9]{{0,3}}[.,]{_HOST_LABEL}(?:[.,]{_HOST_LABEL})+{_URL_TAIL}', 0.6),
     ('Bare domain', rf'{_BARE_DOMAIN}{_tld(BARE_DOMAIN_TLDS)}\b(?![.-]?\w){_URL_TAIL}', 0.5),
     ('Bare domain with a path', rf'''{_BARE_DOMAIN}{_tld(WORD_TLDS)}/[^\s<>"']*''', 0.5),
 ]

@@ -138,6 +138,12 @@ def test_ordinary_text_is_not_an_address(text):
     ('1234 N Cedar Ridge STE 1000', 'Cedar Ridge STE', '1234 N Cedar Ridge STE 1000'),  # Found up to the unit.
     ('Bend PASTE 1000', 'Bend PASTE', 'Bend PASTE'),
     ('Clinic: 500 Main St; Suite 12', '500 Main St', '500 Main St; Suite 12'),
+    # A suite after a word, such as a building's name.
+    ('500 Main St Medical Ste 100A', '500 Main St', '500 Main St Medical Ste 100A'),
+    ('500 Main St    Plaza Suite 4', '500 Main St', '500 Main St    Plaza Suite 4'),
+    # Not a bare "#" after a word: that's another kind of number.
+    ('500 Main St Invoice #12345', '500 Main St', '500 Main St'),
+    ('500 Main St Unit price 12', '500 Main St', '500 Main St'),
     # A ZIP code after a city, with or without the state.
     ('Ann Lee, Springfield 97477 DL 1234', 'Springfield', 'Springfield 97477'),
     ('Ann Lee, Springfield OR. 97477', 'Springfield', 'Springfield OR. 97477'),
@@ -189,6 +195,9 @@ def test_street_name_is_not_taken_before_a_whole_address():
     # Any TLD counts with a scheme or www.
     ('Report at https://lab.example.do/r/1', ['https://lab.example.do/r/1']),
     ('www.clinic.today', ['www.clinic.today']),
+    # A comma typed for a dot, after www.
+    ('Visit www.sunnymeadows,vet for hours', ['www.sunnymeadows,vet']),
+    ('Visit www,sunnymeadows.com', ['www,sunnymeadows.com']),
 ])
 def test_urls_are_found(text, expected):
     """
