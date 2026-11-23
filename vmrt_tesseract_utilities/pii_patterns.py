@@ -75,6 +75,10 @@ _ABBREVIATED_STREET_TYPE = r'(?=[A-Z])(?i:' + '|'.join(_STREET_TYPE_ABBREVIATION
 _TITLE_CASE_STREET_TYPE = '(?:' + '|'.join(a.capitalize() for a in _STREET_TYPE_ABBREVIATIONS) + r')\b\.?'
 _CAPS_STREET_TYPE = '(?:' + '|'.join(a.upper() for a in _STREET_TYPE_ABBREVIATIONS) + r')\b\.?'
 
+# One to three words before a unit word, such as a building's name: "Medical" or "Medical Center" in "500 Main St
+# Medical Center Ste 100A". Not before a bare "#", so the number in "500 Main St Invoice #12345" is kept.
+_WORDS_BEFORE_UNIT = r"(?:[A-Z][A-Za-z'.-]*[ \t]+){1,3}(?=(?i:suite|ste|unit|apt|bldg|building)\b)"
+
 # A US phone number, such as "(541) 555-0134" or "541.555.0134".
 _PHONE = r'\(?[0-9]{3}\)?[ \t.-]?[0-9]{3}[ \t.-]?[0-9]{4}(?![0-9])'
 
@@ -86,6 +90,7 @@ _LINE_OR_CLAUSE_END = r'(?=[ \t]*(?:[,;]|$))'
 _BEFORE_REST = r'(?:[ \t]*,[ \t]*|[ \t]*\r?\n[ \t]*|[ \t]+)'
 _CLEAR_ADDRESS_AFTER = (rf'(?=[ \t]+{_DIRECTION}(?:{_LINE_OR_CLAUSE_END}|[ \t]+(?:{_UNIT_WORD}|{CITY_STATE_ZIP_REGEX}))'
                         rf'|{_BEFORE_REST}(?:{_UNIT_WORD}|{CITY_STATE_ZIP_REGEX})'
+                        rf'|[ \t]+{_WORDS_BEFORE_UNIT}{_UNIT_WORD}'
                         rf'|[ \t,]+(?:{_STREET_WORD}[ \t,]+){{1,3}}{CITY_STATE_ZIP_REGEX}|[ \t]+{_PHONE})')
 
 # A word that is never part of a street's name before an abbreviated street type: a time ("Recheck 2 Weeks Dr") or
@@ -152,11 +157,9 @@ ADDRESS_PATTERNS = [
 _STREET_REST_NAME_AND_TYPE = _street_name_then_type(lambda word: rf'(?:[ \t]+{word}){{0,3}}[ \t]+')
 _STREET_REST = rf'{_STREET_REST_NAME_AND_TYPE}(?:[ \t]+{_DIRECTION})?'
 _UNIT_AFTER = rf'\.?[ \t]*[,;]?[ \t]*(?:{_DIRECTION}[ \t]+)?{_UNIT_WORD}[ \t]*#?[A-Z0-9-]+\b'
-# After a street, a unit can also follow a word, as in "500 Main St Medical Ste 100A" (a building's or plaza's name).
-# Not before a bare "#", so the number in "500 Main St Invoice #12345" is kept. Only after a street: after a city
-# alone, the word is more often part of the record ("Portland Oncology Unit 4").
-_WORD_BEFORE_UNIT = r"[A-Z][A-Za-z'.-]*[ \t]+(?=(?i:suite|ste|unit|apt|bldg|building)\b)"
-_UNIT_AFTER_STREET = (rf'\.?[ \t]*[,;]?[ \t]*(?:{_DIRECTION}[ \t]+|{_WORD_BEFORE_UNIT})?{_UNIT_WORD}'
+# After a street, a unit can also follow a building's or plaza's name (see _WORDS_BEFORE_UNIT). Only after a street:
+# after a city alone, the words are more often part of the record ("Portland Oncology Unit 4").
+_UNIT_AFTER_STREET = (rf'\.?[ \t]*[,;]?[ \t]*(?:{_DIRECTION}[ \t]+|{_WORDS_BEFORE_UNIT})?{_UNIT_WORD}'
                       rf'[ \t]*#?[A-Z0-9-]+\b')
 _ZIP_AFTER = rf'\.?(?:,?[ \t]+{_STATE})?,?[ \t]+{_ZIP}(?![\w-])'
 _AFTER_ADDRESS_RE = re.compile(rf'(?P<street>{_STREET_REST})?(?:{_UNIT_AFTER})?(?:{_ZIP_AFTER})?',

@@ -145,6 +145,11 @@ def test_ordinary_text_is_not_an_address(text):
     ('500 Main St Invoice #12345', '500 Main St', '500 Main St'),
     ('500 Main St Unit price 12', '500 Main St', '500 Main St'),
     ('Clinic: Main St Medical Ste 100A', 'Main St', 'Main St Medical Ste 100A'),
+    ('500 Main St Medical Center Ste 100', '500 Main St', '500 Main St Medical Center Ste 100'),
+    ('500 Main St Bayview Medical Center Suite 4', '500 Main St', '500 Main St Bayview Medical Center Suite 4'),
+    # Found only the street's name, with a building's name and suite after its type.
+    ('500 Main St Medical Ste 100', 'Main', '500 Main St Medical Ste 100'),
+    ('500 Main St Medical Center Ste 100', 'Main', '500 Main St Medical Center Ste 100'),
     ('PO Box 112 Two Rivers Rd Medical Suite 4', 'PO Box 112', 'PO Box 112 Two Rivers Rd Medical Suite 4'),
     # Not a word before a unit after a place with no street: the word is part of the record.
     ('Referred to Portland Oncology Unit 4 for chemo', 'Portland', 'Portland'),
