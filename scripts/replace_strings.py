@@ -20,10 +20,12 @@ from sqlalchemy.pool import NullPool
 from vmrt_tesseract_utilities.cli import \
     EXIT_TOO_MANY_FAILURES as EXIT_INCOMPLETE
 from vmrt_tesseract_utilities.cli import normalize_flag_spelling
-from vmrt_tesseract_utilities.database import (StringReplacementCompletion,
+from vmrt_tesseract_utilities.database import (MissingColumnError,
+                                               StringReplacementCompletion,
                                                StringReplacementPass,
                                                TranscriptionInput,
                                                TranscriptionOutput,
+                                               check_text_source_column,
                                                get_database_session)
 from vmrt_tesseract_utilities.logging import stdout_logger
 from vmrt_tesseract_utilities.string_replacer import StringReplacer
@@ -609,8 +611,32 @@ def _log_summary(args: argparse.Namespace, processed: int, failures: List[tuple]
                               "passes.")
 
 
+def check_database(args: argparse.Namespace) -> bool:
+    """
+    Checks that the database has the columns this script reads, before anything is replaced.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        The parsed args.
+
+    Returns
+    -------
+    bool
+        True if the run can go ahead; False, with the reason logged, if the database needs a column added.
+    """
+    try:
+        check_text_source_column(get_database_session(echo=args.debug_sql, poolclass=NullPool))
+    except MissingColumnError as e:
+        stdout_logger.error(f'Stopping before replacing anything: {e}')
+        return False
+    return True
+
+
 if __name__ == "__main__":
     args = parse_args()
+    if not check_database(args):
+        sys.exit(1)
     try:
         target_strings = read_target_strings(args.data_file, args.key_column)
         pass_hash, effective_targets = make_pass_hash(target_strings, args.replacement_string)

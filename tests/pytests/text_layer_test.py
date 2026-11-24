@@ -16,6 +16,7 @@ import pytest
 from tests.synthetic_pdfs import DigitalPage, SyntheticPage, write_pdf
 from vmrt_tesseract_utilities import text_layer
 from vmrt_tesseract_utilities.text_layer import (GARBLED, IMAGE, NO_TEXT, SCAN,
+                                                 DamagedPdfError,
                                                  TextLayerError, read_pages)
 
 needs_poppler = pytest.mark.skipif(shutil.which('pdftotext') is None or isinstance(PIL, mock.MagicMock),
@@ -158,10 +159,27 @@ def test_poppler_failure_raises_with_its_message():
             read_pages('record.pdf')
 
 
+def test_poppler_failure_is_a_damaged_pdf_but_a_killed_one_is_not():
+    """
+    Test that poppler exiting with an error counts as a damaged PDF, which would fail again, but being killed (a
+    negative code, e.g. out of memory) doesn't.
+    """
+    failed = subprocess.CompletedProcess(['pdfinfo'], 1, stdout=b'', stderr=b'Syntax Error')
+    with mock.patch('subprocess.run', return_value=failed):
+        with pytest.raises(DamagedPdfError):
+            read_pages('record.pdf')
+    killed = subprocess.CompletedProcess(['pdfinfo'], -9, stdout=b'', stderr=b'')
+    with mock.patch('subprocess.run', return_value=killed):
+        with pytest.raises(TextLayerError) as error:
+            read_pages('record.pdf')
+    assert not isinstance(error.value, DamagedPdfError)
+
+
 def test_poppler_timeout_raises():
     with mock.patch('subprocess.run', side_effect=subprocess.TimeoutExpired('pdftotext', 300)):
-        with pytest.raises(TextLayerError, match='took longer than 300 seconds on record.pdf'):
+        with pytest.raises(TextLayerError, match='took longer than 300 seconds on record.pdf') as error:
             read_pages('record.pdf')
+    assert not isinstance(error.value, DamagedPdfError)
 
 
 def test_read_pages_puts_the_tools_together():
@@ -179,6 +197,59 @@ def test_read_pages_puts_the_tools_together():
     with mock.patch('subprocess.run', side_effect=run):
         results = read_pages('record.pdf')
     assert [(r.page, r.ocr_reason) for r in results] == [(1, ''), (2, SCAN), (3, NO_TEXT)]
+
+
+def test_form_feed_inside_a_page_does_not_shift_pages():
+    """
+    Test that a form feed inside a page's text (as a broken font can give) doesn't move later pages' text onto the
+    wrong page: the pages are read one at a time instead.
+    """
+    page_text = {1: 'Annual exam. Weight 32 kg. Vaccines current. ' * 3 + '\fmore of page 1\n',
+                 2: 'Recheck exam. Ears clean. Weight 30.8 kg. Next visit in six months. ' * 2 + '\n'}
+
+    def run(args, **kwargs):
+        if args[0] == 'pdfinfo':
+            out = 'Pages:          2\nPage    1 size: 612 x 792 pts\nPage    2 size: 612 x 792 pts\n'
+        elif args[0] == 'pdfimages':
+            out = 'page   num  type\n----\n'
+        elif '-f' in args:
+            out = page_text[int(args[args.index('-f') + 1])] + '\f'
+        else:
+            out = page_text[1] + '\f' + page_text[2] + '\f'
+        return subprocess.CompletedProcess(args, 0, stdout=out.encode(), stderr=b'')
+    with mock.patch('subprocess.run', side_effect=run):
+        results = read_pages('record.pdf')
+    assert [r.text for r in results] == [page_text[1], page_text[2]]
+
+
+def test_reading_pages_one_at_a_time_shares_one_time_limit(monkeypatch):
+    """
+    Test that when the pages are read one at a time, all the calls together get TOOL_TIMEOUT rather than each one,
+    so a long PDF can't hold up the run for a page count's worth of timeouts.
+    """
+    pages = 50
+    clock = [0.0]
+    timeouts = []
+    monkeypatch.setattr(text_layer.time, 'monotonic', lambda: clock[0])
+
+    def run(args, timeout, **kwargs):
+        if args[0] == 'pdfinfo':
+            out = f'Pages:          {pages}\n'
+        elif args[0] == 'pdfimages':
+            out = 'page   num  type\n----\n'
+        elif '-f' in args:
+            timeouts.append(timeout)
+            clock[0] += 20  # Each page takes 20 seconds.
+            out = 'text\f'
+        else:
+            out = 'text\fwith a stray form feed\f'
+        return subprocess.CompletedProcess(args, 0, stdout=out.encode(), stderr=b'')
+    with mock.patch('subprocess.run', side_effect=run):
+        with pytest.raises(TextLayerError, match='one at a time') as error:
+            read_pages('record.pdf')
+    assert not isinstance(error.value, DamagedPdfError)
+    assert len(timeouts) == text_layer.TOOL_TIMEOUT // 20
+    assert timeouts[0] == text_layer.TOOL_TIMEOUT and timeouts[-1] == 20
 
 
 @pytest.mark.parametrize('text, expected', [

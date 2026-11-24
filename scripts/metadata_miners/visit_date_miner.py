@@ -6,10 +6,13 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Set, Tuple
 
 import sqlalchemy
+from sqlalchemy.pool import NullPool
 
 from vmrt_tesseract_utilities.cli import normalize_flag_spelling
-from vmrt_tesseract_utilities.database import (TranscriptionMetadata,
+from vmrt_tesseract_utilities.database import (MissingColumnError,
+                                               TranscriptionMetadata,
                                                TranscriptionOutput,
+                                               check_text_source_column,
                                                get_database_session)
 from vmrt_tesseract_utilities.date_extractor import DateExtractor, find_dates
 from vmrt_tesseract_utilities.logging import stdout_logger
@@ -428,6 +431,30 @@ def parse_args() -> argparse.Namespace:
     return arg_parser.parse_args(normalize_flag_spelling(sys.argv[1:]))
 
 
+def check_database(args: argparse.Namespace) -> bool:
+    """
+    Checks that the database has the columns this script reads, before anything is mined.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        The parsed args.
+
+    Returns
+    -------
+    bool
+        True if the run can go ahead; False, with the reason logged, if the database needs a column added.
+    """
+    try:
+        check_text_source_column(get_database_session(echo=args.debug_sql, poolclass=NullPool))
+    except MissingColumnError as e:
+        stdout_logger.error(f'Stopping before mining anything: {e}')
+        return False
+    return True
+
+
 if __name__ == '__main__':
     args = parse_args()
+    if not check_database(args):
+        sys.exit(1)
     save_visit_dates(args)

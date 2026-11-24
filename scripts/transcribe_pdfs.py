@@ -7,8 +7,10 @@ from typing import LiteralString
 from vmrt_tesseract_utilities.cli import (add_max_failure_rate_argument,
                                           normalize_flag_spelling,
                                           run_exit_code)
-from vmrt_tesseract_utilities.database import (TranscriptionInput,
+from vmrt_tesseract_utilities.database import (MissingColumnError,
+                                               TranscriptionInput,
                                                TranscriptionOutput,
+                                               check_text_source_column,
                                                get_database_session)
 from vmrt_tesseract_utilities.logging import log_run_summary, stdout_logger
 from vmrt_tesseract_utilities.pdf_files import is_pdf_column
@@ -18,6 +20,9 @@ from vmrt_tesseract_utilities.tesseract_operations import (
 
 """
 Runs Tesseract on items stored in the input database.
+
+Pages whose PDF already holds their text (born-digital pages) take that text instead of OCR, unless --ocr-only is
+given; see vmrt_tesseract_utilities.text_layer. Each output row records where its text came from in text_source.
 """
 
 # The values of TranscriptionInput.ocr_status. A PDF is STARTED while it's being read, RETRYING while it's being
@@ -170,19 +175,20 @@ def run_tesseract(args: argparse.Namespace) -> tuple[int, list[tuple[str, str]]]
     ------
     OcrSetupError
         If poppler or Tesseract isn't usable.
+    MissingColumnError
+        If the database has no text_source column.
     """
     base_path = _get_and_create_output_directory(args)
     if args.document_type not in ('document', 'page', 'block',):
         raise ValueError("'--document-type' must be either 'document', 'page' or 'block'")
-    check_ocr_setup()
+    check_ocr_setup(text_layer=not args.ocr_only)
     stdout_logger.info(f'Here we go with document type: {args.document_type}')
-    if args.document_type == 'document':
-        op = TesseractOperationDoc()
-    if args.document_type == 'page':
-        op = TesseractOperationPage()
-    if args.document_type == 'block':
-        op = TesseractOperationBlock()
+    operation = {'document': TesseractOperationDoc, 'page': TesseractOperationPage, 'block': TesseractOperationBlock}
+    op = operation[args.document_type](ocr_only=args.ocr_only)
+    if args.ocr_only:
+        stdout_logger.info('Reading every page with OCR (--ocr-only), even pages whose PDF holds their text.')
     sessionmaker = get_database_session(echo=args.debug_sql)
+    check_text_source_column(sessionmaker)
     with sessionmaker() as session:
         query = (session.query(TranscriptionInput, TranscriptionOutput)
                  .outerjoin(TranscriptionInput.assets)
@@ -240,6 +246,7 @@ def run_tesseract(args: argparse.Namespace) -> tuple[int, list[tuple[str, str]]]
                     db_output = TranscriptionOutput()
                 db_output.ocr_output_file = output_path
                 db_output.ocr_confidence = ocr_result['confidence']
+                db_output.text_source = ocr_result['source']
                 db_output.transcription_input = db_input
                 db_output_logs.append(db_output)
                 db_output = None
@@ -296,6 +303,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--shard', type=parse_shard, metavar='i/N',
                         help='Only process inputs whose ID leaves remainder i when divided by N, so N runs started '
                              'with 0/N to N-1/N can transcribe in parallel without picking the same file.')
+    parser.add_argument('--ocr-only', action='store_true',
+                        help="Read every page with OCR, even pages whose PDF holds their text (the behavior before "
+                             "issue #82), e.g. to compare the two.")
     parser.add_argument('--debug-sql', action='store_true', help='Enable SQL debugging')
     add_max_failure_rate_argument(parser)
     return parser.parse_args(normalize_flag_spelling(sys.argv[1:]))
@@ -312,13 +322,13 @@ def main() -> int:
     Returns
     -------
     int
-        0 if the run succeeded, 1 if the OCR tools aren't usable, or EXIT_TOO_MANY_FAILURES if too many PDFs
-        failed.
+        0 if the run succeeded, 1 if the OCR tools aren't usable or the database needs a column added, or
+        EXIT_TOO_MANY_FAILURES if too many PDFs failed.
     """
     provided_args = parse_args()
     try:
         count, failures = run_tesseract(provided_args)
-    except OcrSetupError as e:
+    except (OcrSetupError, MissingColumnError) as e:
         stdout_logger.error(f'Stopping before transcribing anything: {e}')
         return 1
     # PDFs cut short twice are marked failed without being read this run, so they say nothing about whether this

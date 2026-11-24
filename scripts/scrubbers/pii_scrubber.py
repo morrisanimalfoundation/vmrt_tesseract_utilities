@@ -22,6 +22,7 @@ from vmrt_tesseract_utilities.cli import (add_max_failure_rate_argument,
                                           run_exit_code)
 from vmrt_tesseract_utilities.database import (TranscriptionInput,
                                                TranscriptionOutput,
+                                               check_text_source_column,
                                                get_database_session)
 from vmrt_tesseract_utilities.grls_id import ocr_subject_id_regex
 from vmrt_tesseract_utilities.logging import log_run_summary, stdout_logger
@@ -801,10 +802,11 @@ def scrub_chunks(args: argparse.Namespace, analyzer: AnalyzerEngine) -> tuple[in
 
 def check_status_columns(args: argparse.Namespace) -> None:
     """
-    Checks that the database has the columns failures are recorded in, before any file is scrubbed.
+    Checks that the database has the columns failures are recorded in, and text_source (issue #82), before any
+    file is scrubbed.
 
     `database_setup.py install` doesn't add columns to existing tables, so a database created before this script
-    recorded failures doesn't have them.
+    recorded failures, or before #82, doesn't have them.
 
     Parameters
     ----------
@@ -826,6 +828,7 @@ def check_status_columns(args: argparse.Namespace) -> None:
         raise RuntimeError(f'The transcription_output table has no pii_scrubber_status and pii_scrubber_error '
                            f'columns, which this script records failures in. The database was created before they '
                            f'were added: add them with\n  {ADD_STATUS_COLUMNS_SQL}')
+    check_text_source_column(sessionmaker)
 
 
 def parse_args() -> argparse.Namespace:
