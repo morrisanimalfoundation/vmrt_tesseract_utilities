@@ -138,6 +138,23 @@ def test_ordinary_text_is_not_an_address(text):
     ('1234 N Cedar Ridge STE 1000', 'Cedar Ridge STE', '1234 N Cedar Ridge STE 1000'),  # Found up to the unit.
     ('Bend PASTE 1000', 'Bend PASTE', 'Bend PASTE'),
     ('Clinic: 500 Main St; Suite 12', '500 Main St', '500 Main St; Suite 12'),
+    # A suite after a word, such as a building's name.
+    ('500 Main St Medical Ste 100A', '500 Main St', '500 Main St Medical Ste 100A'),
+    ('500 Main St    Plaza Suite 4', '500 Main St', '500 Main St    Plaza Suite 4'),
+    # Not a bare "#" after a word: that's another kind of number.
+    ('500 Main St Invoice #12345', '500 Main St', '500 Main St'),
+    ('500 Main St Unit price 12', '500 Main St', '500 Main St'),
+    ('Clinic: Main St Medical Ste 100A', 'Main St', 'Main St Medical Ste 100A'),
+    ('500 Main St Medical Center Ste 100', '500 Main St', '500 Main St Medical Center Ste 100'),
+    ('500 Main St Bayview Medical Center Suite 4', '500 Main St', '500 Main St Bayview Medical Center Suite 4'),
+    # Found only the street's name, with a building's name and suite after its type.
+    ('500 Main St Medical Ste 100', 'Main', '500 Main St Medical Ste 100'),
+    ('500 Main St Medical Center Ste 100', 'Main', '500 Main St Medical Center Ste 100'),
+    ('PO Box 112 Two Rivers Rd Medical Suite 4', 'PO Box 112', 'PO Box 112 Two Rivers Rd Medical Suite 4'),
+    # Not a word before a unit after a place with no street: the word is part of the record.
+    ('Referred to Portland Oncology Unit 4 for chemo', 'Portland', 'Portland'),
+    ('Seen at Bend Emergency Building 2 today', 'Bend', 'Bend'),
+    ('Springfield Kennel Unit B', 'Springfield', 'Springfield'),
     # A ZIP code after a city, with or without the state.
     ('Ann Lee, Springfield 97477 DL 1234', 'Springfield', 'Springfield 97477'),
     ('Ann Lee, Springfield OR. 97477', 'Springfield', 'Springfield OR. 97477'),
@@ -189,6 +206,14 @@ def test_street_name_is_not_taken_before_a_whole_address():
     # Any TLD counts with a scheme or www.
     ('Report at https://lab.example.do/r/1', ['https://lab.example.do/r/1']),
     ('www.clinic.today', ['www.clinic.today']),
+    # A comma typed for a dot, after www.
+    ('Visit www.sunnymeadows,vet for hours', ['www.sunnymeadows,vet']),
+    ('Visit www,sunnymeadows.com', ['www,sunnymeadows.com']),
+    ('WWW.SUNNYMEADOWS,VET', ['WWW.SUNNYMEADOWS,VET']),
+    # Anywhere else, a comma ends the URL, so what follows it is kept.
+    ('www.clinic.com,11/05/2024 recheck', ['www.clinic.com']),
+    ('www.clinic.com,and call to book', ['www.clinic.com']),
+    ('www.clinic.com,541-555-0134', ['www.clinic.com']),
 ])
 def test_urls_are_found(text, expected):
     """
